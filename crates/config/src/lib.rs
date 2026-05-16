@@ -6,6 +6,8 @@ use figment::providers::{Env, Format, Serialized, Toml};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+use nix_search_core::ArtifactKind;
+
 #[derive(Debug, Error)]
 pub enum ConfigError {
     #[error("failed to load configuration: {0}")]
@@ -373,14 +375,6 @@ pub enum ProducerKind {
     FlakeOutput,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum ArtifactKind {
-    OptionsJson,
-    PackagesJson,
-    FlakeInfoJson,
-}
-
 fn validate_non_empty(name: &str, value: &str) -> Result<()> {
     if value.trim().is_empty() {
         return Err(ConfigError::Validation(format!("{name} must not be empty")));
@@ -433,7 +427,9 @@ mod tests {
 
     use tempfile::tempdir;
 
-    use super::{AppConfig, ArtifactKind, DatasetKind, ProducerConfig, ProducerKind};
+    use nix_search_core::ArtifactKind;
+
+    use super::{AppConfig, DatasetKind, ProducerConfig, ProducerKind};
 
     #[test]
     fn default_config_is_valid() {
