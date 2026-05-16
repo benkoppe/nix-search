@@ -18,8 +18,8 @@ This is a rough architectural plan for a future Rust project inspired by `nixos-
 
 Useful parts:
 
-- `nixos-search/flake-info/`
-- `nixos-search/frontend/`
+- `references/nixos-search/flake-info/`
+- `references/nixos-search/frontend/`
 
 Key lessons:
 
@@ -44,11 +44,11 @@ Things to avoid:
 
 Useful parts:
 
-- `searchix/defaults.toml`
-- `searchix/internal/config/structs.go`
-- `searchix/internal/fetcher/*.go`
-- `searchix/internal/importer/*.go`
-- `searchix/internal/index/*.go`
+- `references/searchix/defaults.toml`
+- `references/searchix/internal/config/structs.go`
+- `references/searchix/internal/fetcher/*.go`
+- `references/searchix/internal/importer/*.go`
+- `references/searchix/internal/index/*.go`
 
 Key lessons:
 
@@ -75,8 +75,8 @@ Things to improve:
 
 Useful parts:
 
-- `NuschtOS-search/flake.nix`
-- `NuschtOS-search/nix/wrapper.nix`
+- `references/NuschtOS-search/flake.nix`
+- `references/NuschtOS-search/nix/wrapper.nix`
 
 Key lessons:
 
