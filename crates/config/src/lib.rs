@@ -6,7 +6,7 @@ use figment::providers::{Env, Format, Serialized, Toml};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use nix_search_core::ArtifactKind;
+use nix_search_core::{ArtifactKind, SourceLinkConfig};
 
 #[derive(Debug, Error)]
 pub enum ConfigError {
@@ -175,6 +175,8 @@ pub enum DatasetKind {
 pub struct RefConfig {
     pub id: String,
     pub producer: ProducerConfig,
+    #[serde(default)]
+    pub source_links: Option<SourceLinkConfig>,
 }
 
 impl RefConfig {
@@ -417,7 +419,7 @@ mod tests {
 
     use tempfile::tempdir;
 
-    use nix_search_core::ArtifactKind;
+    use nix_search_core::{ArtifactKind, SourceLinkConfig};
 
     use super::{AppConfig, DatasetKind, ProducerConfig, ProducerKind};
 
@@ -677,5 +679,60 @@ mod tests {
         let error = AppConfig::load(Some(&path)).unwrap_err().to_string();
 
         assert!(error.contains("command must not be empty"));
+    }
+
+    #[test]
+    fn loads_ref_source_links() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("nix-search.toml");
+
+        fs::write(
+            &path,
+            r#"
+              [projects.fixtures]
+              name = "Fixtures"
+
+              [[projects.fixtures.datasets]]
+              id = "options"
+              kind = "options"
+
+              [[projects.fixtures.datasets.refs]]
+              id = "main"
+
+              [projects.fixtures.datasets.refs.source_links]
+              type = "github"
+              owner = "example"
+              repo = "modules"
+              revision = "abc123"
+              strip_prefixes = ["/build/source/"]
+
+              [projects.fixtures.datasets.refs.producer]
+              type = "existing-file"
+              path = "fixtures/options-small.json"
+              artifact = "options-json"
+              "#,
+        )
+        .unwrap();
+
+        let config = AppConfig::load(Some(&path)).unwrap();
+        let source_links = config.projects["fixtures"].datasets[0].refs[0]
+            .source_links
+            .as_ref()
+            .unwrap();
+
+        match source_links {
+            SourceLinkConfig::Github {
+                owner,
+                repo,
+                revision,
+                strip_prefixes,
+            } => {
+                assert_eq!(owner, "example");
+                assert_eq!(repo, "modules");
+                assert_eq!(revision.as_deref(), Some("abc123"));
+                assert_eq!(strip_prefixes, &vec!["/build/source/".to_owned()]);
+            }
+            other => panic!("unexpected source links config: {other:?}"),
+        }
     }
 }

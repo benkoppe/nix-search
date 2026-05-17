@@ -16,6 +16,12 @@ kind = "options"
 [[projects.nixpkgs.datasets.refs]]
 id = "unstable"
 
+[projects.nixpkgs.datasets.refs.source_links]
+type = "github"
+owner = "NixOS"
+repo = "nixpkgs"
+revision = "nixos-unstable"
+
 [projects.nixpkgs.datasets.refs.producer]
 type = "nix-build-options-json"
 ref = "github:NixOS/nixpkgs/nixos-unstable"
@@ -30,6 +36,12 @@ kind = "packages"
 
 [[projects.nixpkgs.datasets.refs]]
 id = "unstable"
+
+[projects.nixpkgs.datasets.refs.source_links]
+type = "github"
+owner = "NixOS"
+repo = "nixpkgs"
+revision = "nixos-unstable"
 
 [projects.nixpkgs.datasets.refs.producer]
 type = "channel-packages-json"
@@ -61,6 +73,10 @@ kind = "options"
 
 [[projects.eval-fixture.datasets.refs]]
 id = "local"
+
+[projects.eval-fixture.datasets.refs.source_links]
+type = "prefix"
+url_prefix = "https://example.com/blob/main/"
 
 [projects.eval-fixture.datasets.refs.producer]
 type = "eval-modules"

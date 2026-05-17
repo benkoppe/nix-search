@@ -7,7 +7,9 @@ use clap::{Args, Parser, Subcommand};
 use nix_search_config::{
     AppConfig, DatasetConfig, DatasetKind, ProducerConfig, ProjectConfig, RefConfig,
 };
-use nix_search_core::{ArtifactKind, SearchDocument};
+use nix_search_core::{
+    ArtifactKind, CommonDoc, SearchDocument, SourceLinkConfig, SourceLinkResolver,
+};
 use nix_search_index::{
     IndexGenerationManifest, IndexStore, IndexTargetManifest, SearchHit, SearchIndex, SearchOptions,
 };
@@ -436,7 +438,7 @@ fn search(args: SearchArgs) -> Result<()> {
     })?;
 
     for hit in hits {
-        print_search_hit(hit);
+        print_search_hit(&config, hit);
     }
 
     Ok(())
@@ -729,8 +731,8 @@ fn print_artifact_metadata(produced: &ProducedArtifact) {
     }
 }
 
-fn print_search_hit(hit: SearchHit) {
-    let common = hit.document.common();
+fn print_search_hit(config: &AppConfig, hit: SearchHit) {
+    let common = hit.document.common().clone();
 
     println!(
         "{score:.3}  {kind}  {project}/{dataset}/{ref_id}  {name}",
@@ -746,6 +748,9 @@ fn print_search_hit(hit: SearchHit) {
         println!("       groups: {}", common.name_parts.groups.join(", "));
     }
 
+    let resolver = source_link_config_for_document(config, &common)
+        .map(|source_links| SourceLinkResolver::new(source_links, common.revision.as_deref()));
+
     match hit.document {
         SearchDocument::Option(option) => {
             if let Some(description) = option.description {
@@ -753,6 +758,15 @@ fn print_search_hit(hit: SearchHit) {
 
                 if !summary.is_empty() {
                     println!("       {summary}");
+                }
+            }
+
+            if let Some(resolver) = resolver {
+                for declaration in &option.declarations {
+                    if let Some(url) = resolver.resolve_declaration(declaration) {
+                        println!("       source: {url}");
+                        break;
+                    }
                 }
             }
         }
@@ -778,8 +792,33 @@ fn print_search_hit(hit: SearchHit) {
                     println!("       {summary}");
                 }
             }
+
+            if let (Some(resolver), Some(position)) = (resolver, package.position.as_deref())
+                && let Some(url) = resolver.resolve_package_position(position)
+            {
+                println!("       source: {url}");
+            }
         }
     }
+}
+
+fn source_link_config_for_document<'a>(
+    config: &'a AppConfig,
+    common: &CommonDoc,
+) -> Option<&'a SourceLinkConfig> {
+    let project = config.projects.get(&common.project)?;
+
+    let dataset = project
+        .datasets
+        .iter()
+        .find(|dataset| dataset.id == common.dataset)?;
+
+    let ref_config = dataset
+        .refs
+        .iter()
+        .find(|ref_config| ref_config.id == common.ref_id)?;
+
+    ref_config.source_links.as_ref()
 }
 
 fn current_manifest_targets(

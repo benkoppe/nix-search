@@ -573,7 +573,7 @@ impl Consumer for PackagesJsonConsumer {
 mod tests {
     use std::fs;
 
-    use nix_search_core::ArtifactKind;
+    use nix_search_core::{ArtifactKind, SearchDocument};
     use nix_search_store::ArtifactStore;
     use tempfile::tempdir;
 
@@ -715,10 +715,18 @@ mod tests {
         let consumer = OptionsJsonConsumer;
         let docs = consumer.consume(&store, &produced).await.unwrap();
 
+        let fixture_option = docs
+            .iter()
+            .find(|doc| doc.name() == "programs.fixture.enable")
+            .expect("expected fixture option in docs");
+
+        let SearchDocument::Option(option) = fixture_option else {
+            panic!("expected fixture option to be an option document");
+        };
+
         assert!(
-            docs.iter()
-                .any(|doc| doc.name() == "programs.fixture.enable"),
-            "expected fixture option in docs: {docs:#?}"
+            !option.declarations.is_empty(),
+            "expected fixture option to have source declarations: {option:#?}"
         );
     }
 
