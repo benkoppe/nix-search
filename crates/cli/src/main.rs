@@ -39,6 +39,9 @@ enum Command {
     /// Search configured indexes.
     Search(SearchArgs),
 
+    /// Serve the web UI.
+    Serve(ConfigArgs),
+
     /// Debug artifact production and metadata.
     Artifact {
         #[command(subcommand)]
@@ -185,6 +188,7 @@ async fn main() -> Result<()> {
         Command::CheckConfig(args) => check_config(args),
         Command::Update(args) => update(args).await,
         Command::Search(args) => search(args),
+        Command::Serve(args) => serve(args).await,
         Command::Artifact { command } => match command {
             ArtifactCommand::Produce(args) => artifact_produce(args).await,
             ArtifactCommand::Inspect(args) => artifact_inspect(args).await,
@@ -442,6 +446,12 @@ fn search(args: SearchArgs) -> Result<()> {
     }
 
     Ok(())
+}
+
+async fn serve(args: ConfigArgs) -> Result<()> {
+    let config = AppConfig::load(args.config.as_deref()).context("failed to load config")?;
+
+    nix_search_web::serve(config).await
 }
 
 async fn produce_target(store: &ArtifactStore, target: &TargetRef) -> Result<ProducedArtifact> {
