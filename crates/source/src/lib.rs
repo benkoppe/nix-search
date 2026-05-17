@@ -322,6 +322,7 @@ async fn run_nix_build_expression(expression_path: &Path) -> Result<PathBuf> {
         .arg("build")
         .arg("--extra-experimental-features")
         .arg("nix-command flakes")
+        .arg("--impure")
         .arg("--no-link")
         .arg("--print-out-paths")
         .arg("--file")
@@ -372,6 +373,12 @@ let
   module = getAttrPath (lib.splitString "." {modules_attr}) flake;
 
   eval = lib.evalModules {{
+    specialArgs = {{
+      inherit pkgs lib;
+      inputs = flake.inputs or {{}};
+      self = flake;
+    }};
+
     modules = [
       module
       ({{ lib, ... }}: {{
