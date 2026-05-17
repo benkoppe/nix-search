@@ -1408,6 +1408,7 @@ dependencies = [
  "nix-search-ingest",
  "nix-search-store",
  "reqwest",
+ "serde_json",
  "tempfile",
  "tokio",
 ]

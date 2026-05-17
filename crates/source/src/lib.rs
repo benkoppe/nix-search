@@ -1,9 +1,10 @@
 use std::io::Read;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use bytes::Bytes;
+use tempfile::tempdir;
 use tokio::process::Command;
 
 use nix_search_core::{ArtifactKind, IngestContext, SearchDocument};
@@ -233,6 +234,180 @@ fn normalize_nix_path_source(source_ref: &str) -> String {
 }
 
 #[derive(Debug, Clone)]
+pub struct EvalModulesProducer {
+    source_ref: String,
+    modules_attr: String,
+    options_prefix: Option<String>,
+    url_prefix: Option<String>,
+    producer_name: String,
+}
+
+impl EvalModulesProducer {
+    pub fn new(
+        source_ref: impl Into<String>,
+        modules_attr: impl Into<String>,
+        options_prefix: Option<String>,
+        url_prefix: Option<String>,
+    ) -> Self {
+        Self {
+            source_ref: source_ref.into(),
+            modules_attr: modules_attr.into(),
+            options_prefix,
+            url_prefix,
+            producer_name: "eval-modules".to_owned(),
+        }
+    }
+}
+
+#[async_trait]
+impl Producer for EvalModulesProducer {
+    async fn produce(
+        &self,
+        store: &ArtifactStore,
+        request: &ProduceRequest,
+    ) -> Result<ProducedArtifact> {
+        let tempdir = tempdir().context("failed to create temporary eval-modules directory")?;
+        let expression_path = tempdir.path().join("eval-modules-options.nix");
+
+        let expression = eval_modules_expression(&self.source_ref, &self.modules_attr);
+        tokio::fs::write(&expression_path, expression)
+            .await
+            .with_context(|| {
+                format!(
+                    "failed to write eval-modules expression {}",
+                    expression_path.display()
+                )
+            })?;
+
+        let output_path = run_nix_build_expression(&expression_path)
+            .await
+            .with_context(|| {
+                format!(
+                    "failed to build options JSON for flake {:?}, module attr {:?}",
+                    self.source_ref, self.modules_attr
+                )
+            })?;
+
+        let options_json_path = output_path.join("share/doc/nixos/options.json");
+
+        let bytes = tokio::fs::read(&options_json_path).await.with_context(|| {
+            format!(
+                "failed to read generated options JSON {}",
+                options_json_path.display()
+            )
+        })?;
+
+        let artifact_ref = request.artifact_ref(ArtifactKind::OptionsJson);
+
+        let mut metadata_input = ArtifactMetadataInput::new(self.producer_name.clone());
+        metadata_input.source = Some(self.source_ref.clone());
+
+        if let Some(options_prefix) = &self.options_prefix {
+            metadata_input.warnings.push(format!(
+                "options_prefix is configured but not applied yet: {options_prefix}"
+            ));
+        }
+
+        if let Some(url_prefix) = &self.url_prefix {
+            metadata_input.warnings.push(format!(
+                "url_prefix is configured but not applied yet: {url_prefix}"
+            ));
+        }
+
+        let metadata = store
+            .put_artifact(&artifact_ref, Bytes::from(bytes), metadata_input)
+            .await
+            .context("failed to write eval-modules options artifact to store")?;
+
+        Ok(ProducedArtifact {
+            artifact_ref,
+            metadata,
+        })
+    }
+}
+
+async fn run_nix_build_expression(expression_path: &Path) -> Result<PathBuf> {
+    let output = Command::new("nix")
+        .arg("build")
+        .arg("--extra-experimental-features")
+        .arg("nix-command flakes")
+        .arg("--no-link")
+        .arg("--print-out-paths")
+        .arg("--file")
+        .arg(expression_path)
+        .output()
+        .await
+        .with_context(|| {
+            format!(
+                "failed to run nix build for expression {}",
+                expression_path.display()
+            )
+        })?;
+
+    if !output.status.success() {
+        anyhow::bail!(
+            "nix build failed with status {}\nstdout:\n{}\nstderr:\n{}",
+            output.status,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+
+    let stdout = String::from_utf8(output.stdout).context("nix stdout was not valid UTF-8")?;
+
+    let output_path = stdout
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .context("nix build succeeded but did not print an output path")?;
+
+    Ok(PathBuf::from(output_path))
+}
+
+fn eval_modules_expression(source_ref: &str, modules_attr: &str) -> String {
+    format!(
+        r#"
+let
+  flake = builtins.getFlake {source_ref};
+  pkgs = import <nixpkgs> {{ }};
+  lib = pkgs.lib;
+
+  getAttrPath = path: value:
+    builtins.foldl'
+      (acc: name: acc.${{name}})
+      value
+      path;
+
+  module = getAttrPath (lib.splitString "." {modules_attr}) flake;
+
+  eval = lib.evalModules {{
+    modules = [
+      module
+      ({{ lib, ... }}: {{
+        options._module.args = lib.mkOption {{
+          internal = true;
+        }};
+
+        config._module.check = false;
+      }})
+    ];
+  }};
+in
+  (pkgs.nixosOptionsDoc {{
+    inherit (eval) options;
+    warningsAreErrors = false;
+  }}).optionsJSON
+"#,
+        source_ref = nix_string(source_ref),
+        modules_attr = nix_string(modules_attr),
+    )
+}
+
+fn nix_string(value: &str) -> String {
+    serde_json::to_string(value).expect("serializing a string cannot fail")
+}
+
+#[derive(Debug, Clone)]
 pub struct ChannelPackagesJsonProducer {
     channel: String,
     url: Option<String>,
@@ -387,7 +562,7 @@ mod tests {
 
     use super::{
         Consumer, ExistingFileProducer, OptionsJsonConsumer, ProduceRequest, Producer,
-        normalize_nix_path_source,
+        eval_modules_expression, normalize_nix_path_source,
     };
 
     #[tokio::test]
@@ -499,5 +674,23 @@ mod tests {
             producer.url(),
             "https://channels.nixos.org/nixos-unstable/packages.json.br"
         );
+    }
+
+    #[test]
+    fn eval_modules_expression_contains_flake_ref_and_module_attr() {
+        let expression = eval_modules_expression("github:example/project", "nixosModules.default");
+
+        assert!(expression.contains("\"github:example/project\""));
+        assert!(expression.contains("\"nixosModules.default\""));
+        assert!(expression.contains("builtins.getFlake"));
+        assert!(expression.contains("lib.evalModules"));
+        assert!(expression.contains("pkgs.nixosOptionsDoc"));
+    }
+
+    #[test]
+    fn nix_string_escapes_values() {
+        let escaped = super::nix_string("hello\"world");
+
+        assert_eq!(escaped, "\"hello\\\"world\"");
     }
 }

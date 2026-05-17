@@ -12,8 +12,9 @@ use nix_search_index::{
     IndexGenerationManifest, IndexStore, IndexTargetManifest, SearchHit, SearchIndex, SearchOptions,
 };
 use nix_search_source::{
-    ChannelPackagesJsonProducer, Consumer, ExistingFileProducer, NixBuildOptionsJsonProducer,
-    OptionsJsonConsumer, PackagesJsonConsumer, ProduceRequest, ProducedArtifact, Producer,
+    ChannelPackagesJsonProducer, Consumer, EvalModulesProducer, ExistingFileProducer,
+    NixBuildOptionsJsonProducer, OptionsJsonConsumer, PackagesJsonConsumer, ProduceRequest,
+    ProducedArtifact, Producer,
 };
 use nix_search_store::{ArtifactRef, ArtifactStore};
 
@@ -483,6 +484,27 @@ async fn produce_target(store: &ArtifactStore, target: &TargetRef) -> Result<Pro
             producer.produce(store, &request).await.with_context(|| {
                 format!(
                     "failed to produce channel packages artifact for {}/{}/{}",
+                    target.project_id, target.dataset_id, target.ref_config.id
+                )
+            })
+        }
+
+        ProducerConfig::EvalModules {
+            source_ref,
+            modules_attr,
+            options_prefix,
+            url_prefix,
+        } => {
+            let producer = EvalModulesProducer::new(
+                source_ref,
+                modules_attr,
+                options_prefix.clone(),
+                url_prefix.clone(),
+            );
+
+            producer.produce(store, &request).await.with_context(|| {
+                format!(
+                    "failed to produce eval-modules options artifact for {}/{}/{}",
                     target.project_id, target.dataset_id, target.ref_config.id
                 )
             })
