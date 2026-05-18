@@ -506,7 +506,7 @@ fn render_entry_modal(
 
     format!(
         r#"<div id="entry-modal-container">
-     <dialog id="entry-modal">
+     <dialog id="entry-modal" data-close-url="{close_href}">
        <article class="entry">
          <header>
            <div>
@@ -538,7 +538,7 @@ fn render_entry_error_modal(request: &PageRequest, message: &str) -> String {
 
     format!(
         r#"<div id="entry-modal-container">
-     <dialog id="entry-modal">
+     <dialog id="entry-modal" data-close-url="{close_href}">
        <article class="entry">
          <header>
            <h2>Entry</h2>
@@ -593,7 +593,7 @@ fn render_ambiguous_entry_modal(
     }
 
     format!(
-        r#"<div id="entry-modal-container">
+        r#"<div id="entry-modal-container" data-close-url="{close_href}">
      <dialog id="entry-modal">
        <article class="entry">
          <header>
@@ -1187,6 +1187,18 @@ fn navigation_script() -> &'static str {
 
        evt.preventDefault();
        navigate(url.toString());
+     });
+
+     document.addEventListener("click", (evt) => {
+       const dialog = evt.target;
+       if (!(dialog instanceof HTMLDialogElement)) return;
+       if (dialog.id !== "entry-modal") return;
+
+       const url = dialog.getAttribute("data-close-url");
+       if (!url) return;
+
+       evt.preventDefault();
+       navigate(url);
      });
 
      let debounce;
