@@ -1,11 +1,13 @@
 use tempfile::tempdir;
 
-use nix_search_core::SearchDocument;
-use nix_search_index::{SearchHit, SearchIndex, SearchOptions, SearchScope};
+use nix_search_core::{DocumentKind, SearchDocument};
+use nix_search_index::{
+    EntryLookup, EntryLookupResult, SearchHit, SearchIndex, SearchOptions, SearchScope,
+};
 use nix_search_test_support::{
     OPTION_GIT_ENABLE, OPTION_SYSTEMD_BOOT_ENABLE, OPTION_TAILSCALE_ENABLE, PACKAGE_GIT,
     PACKAGE_RIPGREP, REF_SMALL, SOURCE_FIXTURES, canonical_documents, ingest_context_for,
-    option_doc_for, package_doc_with_main_program,
+    option_doc_for, package_doc_for, package_doc_with_main_program,
 };
 
 fn build_index(docs: Vec<SearchDocument>) -> (tempfile::TempDir, SearchIndex) {
@@ -214,4 +216,126 @@ fn indexed_document_round_trips_from_stored_json() {
 
     assert_eq!(hits.len(), 1);
     assert_eq!(hits[0].document, original);
+}
+
+#[test]
+fn gets_document_by_id() {
+    let docs = canonical_documents();
+    let expected_id = docs[0].id().to_owned();
+
+    let (_tempdir, index) = build_index(docs);
+
+    let document = index.get_by_id(&expected_id).unwrap().unwrap();
+
+    assert_eq!(document.id(), expected_id);
+}
+
+#[test]
+fn get_by_id_returns_none_for_missing_id() {
+    let (_tempdir, index) = build_index(canonical_documents());
+
+    let document = index.get_by_id("missing/source/ref/option/name").unwrap();
+
+    assert!(document.is_none());
+}
+
+#[test]
+fn finds_entry_by_source_ref_name() {
+    let (_tempdir, index) = build_index(canonical_documents());
+
+    let result = index
+        .find_entry(EntryLookup {
+            source: SOURCE_FIXTURES.to_owned(),
+            ref_id: REF_SMALL.to_owned(),
+            name: OPTION_GIT_ENABLE.to_owned(),
+            kind: Some(DocumentKind::Option),
+        })
+        .unwrap();
+
+    let EntryLookupResult::Found(document) = result else {
+        panic!("expected entry to be found");
+    };
+
+    assert_eq!(document.name(), OPTION_GIT_ENABLE);
+    assert_eq!(document.common().source, SOURCE_FIXTURES);
+    assert_eq!(document.common().ref_id, REF_SMALL);
+    assert_eq!(document.kind(), &DocumentKind::Option);
+}
+
+#[test]
+fn find_entry_returns_not_found() {
+    let (_tempdir, index) = build_index(canonical_documents());
+
+    let result = index
+        .find_entry(EntryLookup {
+            source: SOURCE_FIXTURES.to_owned(),
+            ref_id: REF_SMALL.to_owned(),
+            name: "missing.entry".to_owned(),
+            kind: None,
+        })
+        .unwrap();
+
+    assert!(matches!(result, EntryLookupResult::NotFound));
+}
+
+#[test]
+fn find_entry_uses_kind_to_disambiguate() {
+    let context = ingest_context_for(SOURCE_FIXTURES, REF_SMALL);
+
+    let docs = vec![
+        option_doc_for(&context, "git", "Git option."),
+        package_doc_for(&context, "git", "Git package."),
+    ];
+
+    let (_tempdir, index) = build_index(docs);
+
+    let result = index
+        .find_entry(EntryLookup {
+            source: SOURCE_FIXTURES.to_owned(),
+            ref_id: REF_SMALL.to_owned(),
+            name: "git".to_owned(),
+            kind: Some(DocumentKind::Package),
+        })
+        .unwrap();
+
+    let EntryLookupResult::Found(document) = result else {
+        panic!("expected package entry to be found");
+    };
+
+    assert_eq!(document.name(), "git");
+    assert_eq!(document.kind(), &DocumentKind::Package);
+}
+
+#[test]
+fn find_entry_returns_ambiguous_without_kind() {
+    let context = ingest_context_for(SOURCE_FIXTURES, REF_SMALL);
+
+    let docs = vec![
+        option_doc_for(&context, "git", "Git option."),
+        package_doc_for(&context, "git", "Git package."),
+    ];
+
+    let (_tempdir, index) = build_index(docs);
+
+    let result = index
+        .find_entry(EntryLookup {
+            source: SOURCE_FIXTURES.to_owned(),
+            ref_id: REF_SMALL.to_owned(),
+            name: "git".to_owned(),
+            kind: None,
+        })
+        .unwrap();
+
+    let EntryLookupResult::Ambiguous(documents) = result else {
+        panic!("expected ambiguous entry lookup");
+    };
+
+    let kinds = documents
+        .iter()
+        .map(|document| document.kind())
+        .collect::<Vec<_>>();
+
+    assert_eq!(documents.len(), 2);
+    assert!(kinds.contains(&&DocumentKind::Option));
+    assert!(kinds.contains(&&DocumentKind::Package));
 }

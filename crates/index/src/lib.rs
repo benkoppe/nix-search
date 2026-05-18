@@ -8,7 +8,7 @@ use tantivy::schema::{Field, STORED, STRING, Schema, TEXT, TantivyDocument, Valu
 use tantivy::{Index, IndexReader, IndexWriter, doc};
 use time::OffsetDateTime;
 
-use nix_search_core::{ArtifactKind, OptionDoc, PackageDoc, SearchDocument};
+use nix_search_core::{ArtifactKind, DocumentKind, OptionDoc, PackageDoc, SearchDocument};
 
 const WRITER_MEMORY_BYTES: usize = 50_000_000;
 
@@ -116,6 +116,21 @@ pub struct SearchOptions {
     pub query: String,
     pub limit: usize,
     pub scopes: Vec<SearchScope>,
+}
+
+#[derive(Debug, Clone)]
+pub struct EntryLookup {
+    pub source: String,
+    pub ref_id: String,
+    pub name: String,
+    pub kind: Option<DocumentKind>,
+}
+
+#[derive(Debug, Clone)]
+pub enum EntryLookupResult {
+    Found(Box<SearchDocument>),
+    NotFound,
+    Ambiguous(Vec<SearchDocument>),
 }
 
 impl SearchIndex {
@@ -271,6 +286,96 @@ impl SearchIndex {
         }
 
         Ok(hits)
+    }
+
+    pub fn get_by_id(&self, id: &str) -> Result<Option<SearchDocument>> {
+        let searcher = self.reader.searcher();
+
+        let query = tantivy::query::TermQuery::new(
+            tantivy::Term::from_field_text(self.fields.id, id),
+            tantivy::schema::IndexRecordOption::Basic,
+        );
+
+        let top_docs = searcher
+            .search(&query, &TopDocs::with_limit(1).order_by_score())
+            .context("entry lookup by id failed")?;
+
+        let Some((_, address)) = top_docs.into_iter().next() else {
+            return Ok(None);
+        };
+
+        self.document_at(address).map(Some)
+    }
+
+    pub fn find_entry(&self, lookup: EntryLookup) -> Result<EntryLookupResult> {
+        let searcher = self.reader.searcher();
+
+        let mut clauses: Vec<(tantivy::query::Occur, Box<dyn tantivy::query::Query>)> = vec![
+            (
+                tantivy::query::Occur::Must,
+                Box::new(tantivy::query::TermQuery::new(
+                    tantivy::Term::from_field_text(self.fields.source, &lookup.source),
+                    tantivy::schema::IndexRecordOption::Basic,
+                )),
+            ),
+            (
+                tantivy::query::Occur::Must,
+                Box::new(tantivy::query::TermQuery::new(
+                    tantivy::Term::from_field_text(self.fields.ref_id, &lookup.ref_id),
+                    tantivy::schema::IndexRecordOption::Basic,
+                )),
+            ),
+            (
+                tantivy::query::Occur::Must,
+                Box::new(tantivy::query::TermQuery::new(
+                    tantivy::Term::from_field_text(self.fields.name_exact, &lookup.name),
+                    tantivy::schema::IndexRecordOption::Basic,
+                )),
+            ),
+        ];
+
+        if let Some(kind) = lookup.kind {
+            clauses.push((
+                tantivy::query::Occur::Must,
+                Box::new(tantivy::query::TermQuery::new(
+                    tantivy::Term::from_field_text(self.fields.kind, kind.as_str()),
+                    tantivy::schema::IndexRecordOption::Basic,
+                )),
+            ));
+        }
+
+        let query = tantivy::query::BooleanQuery::new(clauses);
+
+        let top_docs = searcher
+            .search(&query, &TopDocs::with_limit(10).order_by_score())
+            .context("entry lookup failed")?;
+
+        let mut documents = Vec::with_capacity(top_docs.len());
+
+        for (_, address) in top_docs {
+            documents.push(self.document_at(address)?);
+        }
+
+        match documents.len() {
+            0 => Ok(EntryLookupResult::NotFound),
+            1 => Ok(EntryLookupResult::Found(Box::new(documents.remove(0)))),
+            _ => Ok(EntryLookupResult::Ambiguous(documents)),
+        }
+    }
+
+    fn document_at(&self, address: tantivy::DocAddress) -> Result<SearchDocument> {
+        let searcher = self.reader.searcher();
+
+        let retrieved: TantivyDocument = searcher
+            .doc(address)
+            .context("failed to retrieve entry document")?;
+
+        let stored_json = retrieved
+            .get_first(self.fields.stored_json)
+            .and_then(|value| value.as_str())
+            .context("entry document did not contain stored_json")?;
+
+        serde_json::from_str(stored_json).context("failed to deserialize entry document")
     }
 }
 
