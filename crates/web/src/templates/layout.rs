@@ -1,0 +1,105 @@
+use maud::{DOCTYPE, Markup, PreEscaped, html};
+
+use nix_search_config::AppConfig;
+use nix_search_index::SearchHit;
+
+use crate::AppState;
+use crate::RECONCILE_EVENTS_URL;
+use crate::request::{PageRequest, SourceFilter, normalized_query};
+use crate::scripts::navigation_script;
+use crate::urls::source_path;
+
+use super::modal;
+use super::results;
+use super::search;
+
+static CSS: &str = include_str!("../../style.css");
+
+pub fn render_full_page(
+    state: &AppState,
+    request: &PageRequest,
+    search_result: Result<&[SearchHit], &str>,
+) -> Markup {
+    let q = request.query.q.as_deref().unwrap_or("");
+    let source_filter = SourceFilter::from_request(request);
+
+    let results_markup = match search_result {
+        Ok(hits) if normalized_query(&request.query).is_some() => {
+            results::render(request, hits, &state.config)
+        }
+        Ok(_) => results::render_empty(),
+        Err(error) => results::render_error(error),
+    };
+
+    let modal_markup = modal::render(state, request);
+    let source_metadata = source_metadata_json(&state.config);
+
+    let form_action = request
+        .source
+        .as_deref()
+        .map(source_path)
+        .unwrap_or_else(|| "/".to_owned());
+
+    let reconcile_attr = format!(
+        "@get('{RECONCILE_EVENTS_URL}?url=' + encodeURIComponent(location.pathname + location.search))"
+    );
+
+    html! {
+        (DOCTYPE)
+        html lang="en" {
+            head {
+                meta charset="utf-8";
+                meta name="viewport" content="width=device-width, initial-scale=1";
+                title { "Nix Search" }
+                script type="module"
+                    src="https://cdn.jsdelivr.net/gh/starfederation/datastar@main/bundles/datastar.js" {}
+                style { (PreEscaped(CSS)) }
+                noscript {
+                    style { "dialog#entry-modal { display: block; }" }
+                }
+            }
+            body data-on:nix-search-reconcile__window=(reconcile_attr) {
+                main {
+                    h1 { "Nix Search" }
+                    p.subtitle { "Search indexed Nix packages and options." }
+
+                    (search::render_form(&state.config, &source_filter, &form_action, q))
+
+                    (results_markup)
+                    (modal_markup)
+
+                    script #source-metadata type="application/json" {
+                        (PreEscaped(&source_metadata))
+                    }
+                }
+                script { (PreEscaped(navigation_script())) }
+            }
+        }
+    }
+}
+
+fn source_metadata_json(config: &AppConfig) -> String {
+    let entries: Vec<String> = config
+           .sources
+           .iter()
+           .map(|(id, source)| {
+               let name = source.name.as_deref().unwrap_or(id);
+               let refs: Vec<&str> = source.refs.iter().map(|r| r.id.as_str()).collect();
+               let refs_json = refs
+                   .iter()
+                   .map(|r| format!("\"{}\"", r.replace('"', "\\\"")))
+                   .collect::<Vec<_>>()
+                   .join(",");
+               let default_ref = source.default_ref.as_deref().unwrap_or("");
+
+               format!(
+                   r#"{{"id":"{id}","name":"{name}","refs":[{refs_json}],"defaultRef":"{default_ref}"}}"#,
+                   id = id.replace('"', "\\\""),
+                   name = name.replace('"', "\\\""),
+                   default_ref = default_ref.replace('"', "\\\""),
+               )
+           })
+           .collect();
+
+    format!("[{}]", entries.join(","))
+}

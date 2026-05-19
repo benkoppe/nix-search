@@ -1,0 +1,193 @@
+use maud::{Markup, html};
+
+use nix_search_config::AppConfig;
+use nix_search_core::{License, Maintainer, SearchDocument, SourceLinkResolver};
+
+use super::results::source_link_config_for_document;
+
+pub fn render(document: &SearchDocument, config: &AppConfig) -> Markup {
+    match document {
+        SearchDocument::Option(option) => {
+            html! {
+                @if let Some(description) = &option.description {
+                    (section("Description", html! { p { (description) } }))
+                }
+                @if let Some(option_type) = &option.option_type {
+                    (section("Type", html! { p { (option_type) } }))
+                }
+                @if let Some(default) = &option.default {
+                    (json_section("Default", default))
+                }
+                @if let Some(example) = &option.example {
+                    (json_section("Example", example))
+                }
+                @if let Some(related_packages) = &option.related_packages {
+                    (section("Related packages", html! { p { (related_packages) } }))
+                }
+                @let flags: Vec<String> = [
+                    ("Read only", option.read_only),
+                    ("Internal", option.internal),
+                    ("Visible", option.visible),
+                ].into_iter()
+                    .filter_map(|(name, value)| value.map(|v| format!("{name}: {v}")))
+                    .collect();
+                @if !flags.is_empty() {
+                    (section("Flags", html! {
+                        ul {
+                            @for flag in &flags {
+                                li { (flag) }
+                            }
+                        }
+                    }))
+                }
+                @if !option.declarations.is_empty() {
+                    @let resolver = source_link_config_for_document(config, &option.common)
+                        .map(|cfg| SourceLinkResolver::new(cfg, option.common.revision.as_deref()));
+                    (section("Declarations", html! {
+                        ul {
+                            @for declaration in &option.declarations {
+                                li {
+                                    @if let Some(url) = resolver.as_ref().and_then(|r| r.resolve_declaration(declaration)) {
+                                        a href=(url) rel="noreferrer" { (declaration.name) }
+                                    } @else {
+                                        (declaration.name)
+                                    }
+                                }
+                            }
+                        }
+                    }))
+                }
+            }
+        }
+
+        SearchDocument::Package(package) => {
+            html! {
+                @let summary: Vec<String> = [
+                    package.pname.as_deref().map(|v| format!("pname: {v}")),
+                    package.version.as_deref().map(|v| format!("version: {v}")),
+                    package.main_program.as_deref().map(|v| format!("main program: {v}")),
+                    package.broken.map(|v| format!("broken: {v}")),
+                ].into_iter().flatten().collect();
+                @if !summary.is_empty() {
+                    (section("Package", html! {
+                        ul {
+                            @for item in &summary {
+                                li { (item) }
+                            }
+                        }
+                    }))
+                }
+                @if let Some(description) = &package.description {
+                    (section("Description", html! { p { (description) } }))
+                }
+                @if let Some(long_description) = &package.long_description {
+                    (section("Long description", html! { p { (long_description) } }))
+                }
+                @if !package.homepages.is_empty() {
+                    (section("Homepages", html! {
+                        ul {
+                            @for url in &package.homepages {
+                                li {
+                                    @if url.starts_with("http://") || url.starts_with("https://") {
+                                        a href=(url) rel="noreferrer" { (url) }
+                                    } @else {
+                                        (url)
+                                    }
+                                }
+                            }
+                        }
+                    }))
+                }
+                @if !package.platforms.is_empty() {
+                    (section("Platforms", html! {
+                        ul {
+                            @for platform in &package.platforms {
+                                li { (platform) }
+                            }
+                        }
+                    }))
+                }
+                @if !package.licenses.is_empty() {
+                    (licenses_section(&package.licenses))
+                }
+                @if !package.maintainers.is_empty() {
+                    (maintainers_section(&package.maintainers))
+                }
+                @if let Some(position) = &package.position {
+                    @let resolver = source_link_config_for_document(config, &package.common)
+                        .map(|cfg| SourceLinkResolver::new(cfg, package.common.revision.as_deref()));
+                    @let url = resolver.as_ref().and_then(|r| r.resolve_package_position(position));
+                    (section("Source", html! {
+                        p {
+                            @if let Some(href) = url {
+                                a href=(href) rel="noreferrer" { (position) }
+                            } @else {
+                                (position)
+                            }
+                        }
+                    }))
+                }
+            }
+        }
+    }
+}
+
+fn section(title: &str, body: Markup) -> Markup {
+    html! {
+        section.entry-section {
+            h3 { (title) }
+            (body)
+        }
+    }
+}
+
+fn json_section(name: &str, value: &serde_json::Value) -> Markup {
+    let pretty = serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string());
+
+    section(
+        name,
+        html! {
+            pre { (pretty) }
+        },
+    )
+}
+
+fn licenses_section(licenses: &[License]) -> Markup {
+    section(
+        "Licenses",
+        html! {
+            ul {
+                @for license in licenses {
+                    @let label = license.spdx_id.as_deref()
+                        .or(license.name.as_deref())
+                        .or(license.full_name.as_deref())
+                        .unwrap_or("unknown");
+                    li {
+                        @if let Some(url) = &license.url {
+                            a href=(url) rel="noreferrer" { (label) }
+                        } @else {
+                            (label)
+                        }
+                    }
+                }
+            }
+        },
+    )
+}
+
+fn maintainers_section(maintainers: &[Maintainer]) -> Markup {
+    section(
+        "Maintainers",
+        html! {
+            ul {
+                @for maintainer in maintainers {
+                    @let label = maintainer.name.as_deref()
+                        .or(maintainer.github.as_deref())
+                        .or(maintainer.email.as_deref())
+                        .unwrap_or("unknown");
+                    li { (label) }
+                }
+            }
+        },
+    )
+}
