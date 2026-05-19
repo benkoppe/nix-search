@@ -132,3 +132,37 @@ pub fn source_link_config_for_document<'a>(
     let ref_config = source.refs.iter().find(|r| r.id == common.ref_id)?;
     ref_config.source_links.as_ref()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use nix_search_core::{Declaration, IngestContext, OptionDoc, SearchDocument};
+
+    #[test]
+    fn resolves_source_link_when_available() {
+        let config = nix_search_test_support::app_config("./data/indexes");
+
+        let mut option = OptionDoc::new(
+            &IngestContext {
+                source: "fixtures".into(),
+                ref_id: "small".into(),
+                revision: Some("abc123".into()),
+                repo: None,
+            },
+            "programs.fixture.enable",
+        );
+
+        option.declarations.push(Declaration {
+            name: "module.nix:4".into(),
+            url: None,
+        });
+
+        let document = SearchDocument::Option(option);
+        let result = first_source_link(&document, &config);
+
+        assert_eq!(
+            result.as_deref(),
+            Some("https://github.com/example/repo/blob/abc123/module.nix#L4")
+        );
+    }
+}

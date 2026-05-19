@@ -91,3 +91,95 @@ fn query_string<const N: usize>(pairs: [(&str, Option<&str>); N]) -> String {
         .collect::<Vec<_>>()
         .join("&")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::request::{LinkOrigin, PageQuery, PageRequest};
+
+    #[test]
+    fn search_url_for_root_with_query() {
+        let url = search_url_for(
+            None,
+            &PageQuery {
+                q: Some("git".to_owned()),
+                ..PageQuery::default()
+            },
+        );
+        assert_eq!(url, "/?q=git");
+    }
+
+    #[test]
+    fn search_url_for_source_with_query_and_ref() {
+        let url = search_url_for(
+            Some("fixtures"),
+            &PageQuery {
+                q: Some("git".to_owned()),
+                ref_id: Some("small".to_owned()),
+                ..PageQuery::default()
+            },
+        );
+        assert_eq!(url, "/fixtures?q=git&ref=small");
+    }
+
+    #[test]
+    fn entry_url_for_includes_kind() {
+        let url = entry_url_for(
+            "fixtures",
+            "programs.git.enable",
+            Some("option"),
+            &PageQuery {
+                q: Some("git".to_owned()),
+                ref_id: Some("small".to_owned()),
+                ..PageQuery::default()
+            },
+        );
+        assert_eq!(
+            url,
+            "/fixtures/programs.git.enable?q=git&ref=small&kind=option"
+        );
+    }
+
+    #[test]
+    fn close_url_for_strips_entry_segment() {
+        let request = PageRequest {
+            source: Some("fixtures".to_owned()),
+            entry: Some("programs.git.enable".to_owned()),
+            query: PageQuery {
+                q: Some("git".to_owned()),
+                ref_id: Some("small".to_owned()),
+                kind: Some("option".to_owned()),
+                source: None,
+            },
+        };
+        assert_eq!(close_url_for(&request), "/fixtures?q=git&ref=small");
+    }
+
+    #[test]
+    fn close_url_for_returns_root_when_no_source() {
+        let request = PageRequest {
+            source: None,
+            entry: None,
+            query: PageQuery {
+                q: Some("git".to_owned()),
+                ..PageQuery::default()
+            },
+        };
+        assert_eq!(close_url_for(&request), "/?q=git");
+    }
+
+    #[test]
+    fn close_url_for_all_scope_returns_to_root() {
+        let request = PageRequest {
+            source: Some("nixpkgs".to_owned()),
+            entry: Some("rubyPackages.git".to_owned()),
+            query: PageQuery {
+                q: Some("git".to_owned()),
+                ref_id: None,
+                kind: None,
+                source: Some(LinkOrigin::All),
+            },
+        };
+        assert_eq!(close_url_for(&request), "/?q=git");
+    }
+}

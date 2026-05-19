@@ -152,3 +152,47 @@ pub fn parse_document_kind(
         Some(other) => Err(format!("unknown entry kind {other:?}")),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_root_public_url() {
+        let request = page_request_from_public_url("/").unwrap();
+        assert_eq!(request.source, None);
+        assert_eq!(request.entry, None);
+        assert_eq!(request.query.q, None);
+    }
+
+    #[test]
+    fn parses_source_search_public_url() {
+        let request = page_request_from_public_url("/fixtures?q=git&ref=small").unwrap();
+        assert_eq!(request.source.as_deref(), Some("fixtures"));
+        assert_eq!(request.entry, None);
+        assert_eq!(request.query.q.as_deref(), Some("git"));
+        assert_eq!(request.query.ref_id.as_deref(), Some("small"));
+    }
+
+    #[test]
+    fn parses_entry_public_url() {
+        let request = page_request_from_public_url(
+            "/fixtures/programs.git.enable?q=git&ref=small&kind=option",
+        )
+        .unwrap();
+        assert_eq!(request.source.as_deref(), Some("fixtures"));
+        assert_eq!(request.entry.as_deref(), Some("programs.git.enable"));
+        assert_eq!(request.query.q.as_deref(), Some("git"));
+        assert_eq!(request.query.ref_id.as_deref(), Some("small"));
+        assert_eq!(request.query.kind.as_deref(), Some("option"));
+    }
+
+    #[test]
+    fn parses_source_query_param() {
+        let request = page_request_from_public_url("/nixpkgs/git?q=git&source=all").unwrap();
+        assert_eq!(request.source.as_deref(), Some("nixpkgs"));
+        assert_eq!(request.entry.as_deref(), Some("git"));
+        assert_eq!(request.query.q.as_deref(), Some("git"));
+        assert_eq!(request.query.source, Some(LinkOrigin::All));
+    }
+}
