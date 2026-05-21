@@ -32,9 +32,10 @@ fn search(index: &SearchIndex, query: &str) -> Vec<SearchHit> {
         .search(SearchOptions {
             query: query.to_owned(),
             limit: 20,
-            scopes: Vec::new(),
+            ..Default::default()
         })
         .unwrap()
+        .hits
 }
 
 fn names(hits: &[SearchHit]) -> Vec<&str> {
@@ -140,15 +141,15 @@ fn exact_name_match_ranks_before_description_only_match() {
 fn search_limit_is_respected() {
     let (_tempdir, index) = build_index(canonical_documents());
 
-    let hits = index
+    let result = index
         .search(SearchOptions {
             query: "enable".to_owned(),
             limit: 2,
-            scopes: Vec::new(),
+            ..Default::default()
         })
         .unwrap();
 
-    assert_eq!(hits.len(), 2);
+    assert_eq!(result.hits.len(), 2);
 }
 
 #[test]
@@ -172,7 +173,7 @@ fn multiple_scopes_are_ored_by_source_ref_pair() {
 
     let (_tempdir, index) = build_index(docs);
 
-    let hits = index
+    let result = index
         .search(SearchOptions {
             query: OPTION_GIT_ENABLE.to_owned(),
             limit: 20,
@@ -186,10 +187,12 @@ fn multiple_scopes_are_ored_by_source_ref_pair() {
                     ref_id: "unstable".to_owned(),
                 },
             ],
+            ..Default::default()
         })
         .unwrap();
 
-    let pairs = hits
+    let pairs = result
+        .hits
         .iter()
         .map(|hit| {
             (

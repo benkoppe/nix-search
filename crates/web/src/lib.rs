@@ -16,8 +16,9 @@ mod scripts;
 mod templates;
 mod urls;
 
-const DEFAULT_LIMIT: usize = 20;
+const DEFAULT_LIMIT: usize = 50;
 const RECONCILE_EVENTS_URL: &str = "/-/state/events";
+const MORE_RESULTS_URL: &str = "/-/more";
 
 #[derive(Debug, Clone)]
 struct AppState {
@@ -47,6 +48,7 @@ pub async fn serve(config: AppConfig) -> Result<()> {
     let app = Router::new()
         .route("/-/health", get(handlers::health))
         .route(RECONCILE_EVENTS_URL, get(handlers::state_events))
+        .route(MORE_RESULTS_URL, get(handlers::more_results))
         .route("/", get(handlers::root_page))
         .route("/{source}", get(handlers::source_page))
         .route("/{source}/{*entry}", get(handlers::entry_page))

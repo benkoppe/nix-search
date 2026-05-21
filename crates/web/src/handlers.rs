@@ -1,13 +1,14 @@
 use std::convert::Infallible;
 
 use anyhow::{Context, Result};
+use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::response::{Html, IntoResponse, Sse, sse::Event};
 use datastar::prelude::{ExecuteScript, PatchElements};
 use futures_util::stream;
 use serde::Deserialize;
 
-use nix_search_index::{SearchHit, SearchIndex, SearchOptions, SearchScope};
+use nix_search_index::{SearchIndex, SearchOptions, SearchResult, SearchScope};
 
 use crate::AppState;
 use crate::DEFAULT_LIMIT;
@@ -21,6 +22,12 @@ use crate::templates;
 #[derive(Debug, Clone, Deserialize)]
 pub struct StateQuery {
     url: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct MoreQuery {
+    url: String,
+    offset: usize,
 }
 
 pub async fn health() -> &'static str {
@@ -87,10 +94,13 @@ pub async fn state_events(
         }
     };
 
-    let search_result = run_page_search(&state, &request);
+    let search_result = run_search(&state, &request, 0);
 
     let results_html = match &search_result {
-        Ok(hits) => templates::results::render(&request, hits, &state.config).into_string(),
+        Ok(result) => {
+            templates::results::render(&request, &result.hits, result.total, &state.config)
+                .into_string()
+        }
         Err(error) => templates::results::render_error(&format!("{error:#}")).into_string(),
     };
 
@@ -105,12 +115,48 @@ pub async fn state_events(
     Sse::new(stream::iter(events))
 }
 
+pub async fn more_results(
+    State(state): State<AppState>,
+    Query(query): Query<MoreQuery>,
+) -> impl IntoResponse {
+    let request = match page_request_from_public_url(&query.url) {
+        Ok(request) => request,
+        Err(error) => {
+            return Json(serde_json::json!({
+                "error": error
+            }));
+        }
+    };
+
+    let search_result = run_search(&state, &request, query.offset);
+
+    match search_result {
+        Ok(result) => {
+            let rows_html =
+                templates::results::render_rows_only(&request, &result.hits, &state.config);
+            let sentinel_html = templates::results::render_sentinel_update(
+                &result.hits,
+                query.offset,
+                result.total,
+            );
+
+            Json(serde_json::json!({
+                "rows": rows_html,
+                "sentinel": sentinel_html
+            }))
+        }
+        Err(error) => Json(serde_json::json!({
+            "error": format!("{error:#}")
+        })),
+    }
+}
+
 fn render_full_page_response(state: &AppState, request: PageRequest) -> Html<String> {
-    let search_result = run_page_search(state, &request);
+    let search_result = run_search(state, &request, 0);
     let error_message = search_result.as_ref().err().map(|e| format!("{e:#}"));
 
     let view = match (&search_result, &error_message) {
-        (Ok(hits), _) => Ok(hits.as_slice()),
+        (Ok(result), _) => Ok(result),
         (Err(_), Some(error)) => Err(error.as_str()),
         (Err(_), None) => unreachable!(),
     };
@@ -119,9 +165,12 @@ fn render_full_page_response(state: &AppState, request: PageRequest) -> Html<Str
     Html(markup.into_string())
 }
 
-pub fn run_page_search(state: &AppState, request: &PageRequest) -> Result<Vec<SearchHit>> {
+fn run_search(state: &AppState, request: &PageRequest, offset: usize) -> Result<SearchResult> {
     let Some(q) = normalized_query(&request.query) else {
-        return Ok(Vec::new());
+        return Ok(SearchResult {
+            hits: Vec::new(),
+            total: 0,
+        });
     };
 
     let index = SearchIndex::open(&*state.index_path).with_context(|| {
@@ -155,6 +204,7 @@ pub fn run_page_search(state: &AppState, request: &PageRequest) -> Result<Vec<Se
         .search(SearchOptions {
             query: q.to_owned(),
             limit: DEFAULT_LIMIT,
+            offset,
             scopes,
         })
         .context("search failed")

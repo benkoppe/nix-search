@@ -419,9 +419,10 @@ fn search(args: SearchArgs) -> Result<()> {
         query: args.query,
         limit: args.limit,
         scopes,
+        ..Default::default()
     })?;
 
-    for hit in hits {
+    for hit in hits.hits {
         print_search_hit(&config, hit);
     }
 

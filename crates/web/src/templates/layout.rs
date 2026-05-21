@@ -1,7 +1,7 @@
 use maud::{DOCTYPE, Markup, PreEscaped, html};
 
 use nix_search_config::AppConfig;
-use nix_search_index::SearchHit;
+use nix_search_index::SearchResult;
 
 use crate::AppState;
 use crate::RECONCILE_EVENTS_URL;
@@ -18,14 +18,14 @@ static CSS: &str = include_str!("../../style.css");
 pub fn render_full_page(
     state: &AppState,
     request: &PageRequest,
-    search_result: Result<&[SearchHit], &str>,
+    search_result: Result<&SearchResult, &str>,
 ) -> Markup {
     let q = request.query.q.as_deref().unwrap_or("");
     let source_filter = SourceFilter::from_request(request);
 
     let results_markup = match search_result {
-        Ok(hits) if normalized_query(&request.query).is_some() => {
-            results::render(request, hits, &state.config)
+        Ok(result) if normalized_query(&request.query).is_some() => {
+            results::render(request, &result.hits, result.total, &state.config)
         }
         Ok(_) => results::render_empty(),
         Err(error) => results::render_error(error),

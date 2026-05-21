@@ -2,7 +2,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use tantivy::collector::TopDocs;
+use tantivy::collector::{Count, TopDocs};
 use tantivy::query::QueryParser;
 use tantivy::schema::{Field, STORED, STRING, Schema, TEXT, TantivyDocument, Value as _};
 use tantivy::{Index, IndexReader, IndexWriter, doc};
@@ -105,6 +105,12 @@ pub struct SearchHit {
     pub document: SearchDocument,
 }
 
+#[derive(Debug, Clone)]
+pub struct SearchResult {
+    pub hits: Vec<SearchHit>,
+    pub total: usize,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SearchScope {
     pub source: String,
@@ -115,6 +121,7 @@ pub struct SearchScope {
 pub struct SearchOptions {
     pub query: String,
     pub limit: usize,
+    pub offset: usize,
     pub scopes: Vec<SearchScope>,
 }
 
@@ -185,7 +192,7 @@ impl SearchIndex {
         })
     }
 
-    pub fn search(&self, options: SearchOptions) -> Result<Vec<SearchHit>> {
+    pub fn search(&self, options: SearchOptions) -> Result<SearchResult> {
         let searcher = self.reader.searcher();
 
         let mut parser = QueryParser::for_index(
@@ -263,13 +270,19 @@ impl SearchIndex {
 
         let query = tantivy::query::BooleanQuery::new(clauses);
 
-        let top_docs = searcher
-            .search(&query, &TopDocs::with_limit(options.limit).order_by_score())
+        let (top_docs, total) = searcher
+            .search(
+                &query,
+                &(
+                    TopDocs::with_limit(options.limit + options.offset).order_by_score(),
+                    Count,
+                ),
+            )
             .context("search failed")?;
 
-        let mut hits = Vec::with_capacity(top_docs.len());
+        let mut hits = Vec::with_capacity(top_docs.len().saturating_sub(options.offset));
 
-        for (score, address) in top_docs {
+        for (score, address) in top_docs.into_iter().skip(options.offset) {
             let retrieved: TantivyDocument = searcher
                 .doc(address)
                 .context("failed to retrieve search result document")?;
@@ -285,7 +298,7 @@ impl SearchIndex {
             hits.push(SearchHit { score, document });
         }
 
-        Ok(hits)
+        Ok(SearchResult { hits, total })
     }
 
     pub fn get_by_id(&self, id: &str) -> Result<Option<SearchDocument>> {

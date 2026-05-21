@@ -1,3 +1,5 @@
+use crate::MORE_RESULTS_URL;
+
 pub fn dialog_reconcile_script() -> &'static str {
     r#"
       (() => {
@@ -12,8 +14,8 @@ pub fn dialog_reconcile_script() -> &'static str {
       "#
 }
 
-pub fn navigation_script() -> &'static str {
-    r#"
+pub fn navigation_script() -> String {
+    r##"
       (() => {
         const RECONCILE_EVENT = "nix-search-reconcile";
         const metadata = JSON.parse(
@@ -236,10 +238,80 @@ pub fn navigation_script() -> &'static str {
 
         window.nixSearchNavigate = navigate;
 
+        // ─── Infinite scroll ───
+        const MORE_URL = "__MORE_RESULTS_URL__";
+        let loadingMore = false;
+
+        function observeSentinel() {
+          const sentinel = document.querySelector("#load-more-sentinel .load-more-trigger");
+          if (!sentinel) return;
+
+          const observer = new IntersectionObserver((entries) => {
+            for (const entry of entries) {
+              if (entry.isIntersecting && !loadingMore) {
+                observer.disconnect();
+                loadMore(sentinel);
+              }
+            }
+          }, { rootMargin: "200px" });
+
+          observer.observe(sentinel);
+        }
+
+        async function loadMore(trigger) {
+          const offset = trigger.dataset.offset;
+          if (!offset) return;
+
+          loadingMore = true;
+          const pageUrl = location.pathname + location.search;
+          const url = `${MORE_URL}?url=${encodeURIComponent(pageUrl)}&offset=${offset}`;
+
+          try {
+            const res = await fetch(url);
+            const data = await res.json();
+
+            if (data.error) {
+              console.error("Load more failed:", data.error);
+              return;
+            }
+
+            // Preserve scroll position during DOM mutations
+            const scrollY = window.scrollY;
+
+            const tbody = document.getElementById("results-body");
+            if (tbody && data.rows) {
+              tbody.insertAdjacentHTML("beforeend", data.rows);
+            }
+
+            const sentinelEl = document.getElementById("load-more-sentinel");
+            if (sentinelEl) {
+              if (data.sentinel) {
+                sentinelEl.outerHTML = data.sentinel;
+              } else {
+                sentinelEl.remove();
+              }
+            }
+
+            window.scrollTo(0, scrollY);
+          } catch (e) {
+            console.error("Failed to load more results:", e);
+          } finally {
+            loadingMore = false;
+            observeSentinel();
+          }
+        }
+
+        // Start observing on load and after each reconcile
+        observeSentinel();
+        window.addEventListener(RECONCILE_EVENT, () => {
+          setTimeout(observeSentinel, 50);
+        });
+
         (() => {
           const dialog = document.getElementById("entry-modal");
           if (dialog && !dialog.open) dialog.showModal();
         })();
       })();
-      "#
+      "##
+    .replace("__MORE_RESULTS_URL__", MORE_RESULTS_URL)
 }

@@ -8,7 +8,12 @@ use nix_search_index::SearchHit;
 use crate::request::{LinkOrigin, PageQuery, PageRequest, normalized_query};
 use crate::urls::{entry_url_for, ref_id_for_link};
 
-pub fn render(request: &PageRequest, hits: &[SearchHit], config: &AppConfig) -> Markup {
+pub fn render(
+    request: &PageRequest,
+    hits: &[SearchHit],
+    total: usize,
+    config: &AppConfig,
+) -> Markup {
     let Some(q) = normalized_query(&request.query) else {
         return render_empty();
     };
@@ -21,13 +26,13 @@ pub fn render(request: &PageRequest, hits: &[SearchHit], config: &AppConfig) -> 
         };
     }
 
-    let show_source = request.source.is_none()
-        || request.query.source == Some(LinkOrigin::All);
+    let show_source = request.source.is_none() || request.query.source == Some(LinkOrigin::All);
 
     html! {
         div #results aria-live="polite" {
             div.results-status {
-                (hits.len()) " result" @if hits.len() != 1 { "s" }
+                strong { (total) }
+                " result" @if total != 1 { "s" }
                 " for " strong { (q) }
             }
             table.results-table {
@@ -37,14 +42,46 @@ pub fn render(request: &PageRequest, hits: &[SearchHit], config: &AppConfig) -> 
                         th.col-desc { "Description" }
                     }
                 }
-                tbody {
+                tbody #results-body {
                     @for hit in hits {
                         (render_hit_row(request, hit, config, show_source))
                     }
                 }
             }
+            @if hits.len() < total {
+                (render_load_more_sentinel(hits.len()))
+            }
         }
     }
+}
+
+/// Renders just the table row HTML for a batch of hits (no wrapper element).
+pub fn render_rows_only(request: &PageRequest, hits: &[SearchHit], config: &AppConfig) -> String {
+    let show_source = request.source.is_none() || request.query.source == Some(LinkOrigin::All);
+
+    let markup = html! {
+        @for hit in hits {
+            (render_hit_row(request, hit, config, show_source))
+        }
+    };
+
+    markup.into_string()
+}
+
+/// Renders the updated sentinel div (either a new trigger or empty if no more results).
+pub fn render_sentinel_update(hits: &[SearchHit], offset: usize, total: usize) -> String {
+    let next_offset = offset + hits.len();
+
+    let markup = if next_offset < total {
+        render_load_more_sentinel(next_offset)
+    } else {
+        // Empty sentinel — no more results to load
+        html! {
+            div #load-more-sentinel {}
+        }
+    };
+
+    markup.into_string()
 }
 
 pub fn render_empty() -> Markup {
@@ -59,6 +96,22 @@ pub fn render_error(error: &str) -> Markup {
     html! {
         div #results.results-error {
             strong { "Search failed:" } " " (error)
+        }
+    }
+}
+
+fn render_load_more_sentinel(offset: usize) -> Markup {
+    html! {
+        div #load-more-sentinel {
+            (render_load_more_sentinel_inner(offset))
+        }
+    }
+}
+
+fn render_load_more_sentinel_inner(offset: usize) -> Markup {
+    html! {
+        div.load-more-trigger data-offset=(offset) {
+            ""
         }
     }
 }
