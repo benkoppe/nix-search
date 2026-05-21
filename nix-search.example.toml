@@ -12,13 +12,13 @@ default_ref = "nixos-unstable"
 preset_refs = ["nixos-unstable", "nixos-25.11"]
 
 [sources.nixos]
-name = "NixOS Options"
+name = "NixOS"
 preset = "nixos-options"
 default_ref = "nixos-unstable"
 preset_refs = ["nixos-unstable", "nixos-25.11"]
 
 [sources.fixtures]
-name = "Fixtures"
+name = "Fixture"
 kind = "options"
 
 [sources.fixtures.refs.small.producer]
@@ -27,7 +27,7 @@ path = "fixtures/search-small/options.json"
 artifact = "options-json"
 
 [sources.eval-fixture]
-name = "Eval Modules Fixture"
+name = "Eval-Fixture"
 kind = "options"
 
 [sources.eval-fixture.refs.local.source_links]
