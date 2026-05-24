@@ -82,7 +82,7 @@ pub async fn build_and_publish_generation(
 /// Regenerate all configured sources. Returns the new generation path.
 pub async fn regenerate_all(config: &AppConfig) -> Result<Utf8PathBuf> {
     let store = artifact_store_from_config(config)?;
-    let index_store = IndexStore::new(&config.data.index_dir)?;
+    let index_store = IndexStore::new(&config.data.index_dir);
     let targets = all_targets(config);
 
     if targets.is_empty() {

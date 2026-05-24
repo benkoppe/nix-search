@@ -1,8 +1,8 @@
-use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
 use anyhow::{Result, bail};
+use camino::{Utf8Path, Utf8PathBuf};
 use time::OffsetDateTime;
 
 use nix_search_config::AppConfig;
@@ -20,7 +20,7 @@ const MAX_FAILURE_RETRY: Duration = Duration::from_secs(60 * 60);
 
 #[derive(Debug, Clone)]
 pub(crate) struct PublishedGeneration {
-    pub path: PathBuf,
+    pub path: Utf8PathBuf,
     pub manifest: IndexGenerationManifest,
 }
 
@@ -37,7 +37,7 @@ enum MaintenanceOutcome {
     Failed,
 }
 
-pub(crate) fn spawn(config: Arc<AppConfig>, index_path: Arc<RwLock<PathBuf>>) {
+pub(crate) fn spawn(config: Arc<AppConfig>, index_path: Arc<RwLock<Utf8PathBuf>>) {
     let interval = config
         .server
         .schedule
@@ -49,14 +49,12 @@ pub(crate) fn spawn(config: Arc<AppConfig>, index_path: Arc<RwLock<PathBuf>>) {
     });
 }
 
-async fn run_loop(config: Arc<AppConfig>, index_path: Arc<RwLock<PathBuf>>, interval: Duration) {
-    let index_store = match IndexStore::new(&config.data.index_dir) {
-        Ok(index_store) => index_store,
-        Err(error) => {
-            tracing::error!("invalid index directory for maintenance loop: {error:#}");
-            return;
-        }
-    };
+async fn run_loop(
+    config: Arc<AppConfig>,
+    index_path: Arc<RwLock<Utf8PathBuf>>,
+    interval: Duration,
+) {
+    let index_store = IndexStore::new(&config.data.index_dir);
     let regeneration_enabled = config.server.schedule.enabled && has_configured_targets(&config);
 
     loop {
@@ -143,13 +141,7 @@ async fn run_scheduled_regeneration(config: &AppConfig, interval: Duration) -> M
         }
     };
 
-    let index_store = match IndexStore::new(&config.data.index_dir) {
-        Ok(index_store) => index_store,
-        Err(error) => {
-            tracing::error!("invalid index directory for scheduled regeneration: {error:#}");
-            return MaintenanceOutcome::Failed;
-        }
-    };
+    let index_store = IndexStore::new(&config.data.index_dir);
     match current_generation_is_due(&index_store, interval, OffsetDateTime::now_utc()) {
         Ok(true) => {}
         Ok(false) => {
@@ -214,25 +206,25 @@ pub(crate) fn read_current_generation(index_store: &IndexStore) -> Result<Curren
     let manifest = index_store.read_manifest(&path)?;
 
     Ok(CurrentGeneration::Found(PublishedGeneration {
-        path: path.into_std_path_buf(),
+        path,
         manifest,
     }))
 }
 
 pub(crate) fn reconcile_served_generation(
-    index_path: &Arc<RwLock<PathBuf>>,
-    published_path: &Path,
+    index_path: &Arc<RwLock<Utf8PathBuf>>,
+    published_path: &Utf8Path,
 ) {
     let mut served_path = index_path.write().expect("index path lock poisoned");
 
     if served_path.as_path() != published_path {
         tracing::info!(
-            old = %served_path.display(),
-                new = %published_path.display(),
+            old = %served_path,
+                new = %published_path,
                 "detected published index generation change"
         );
 
-        *served_path = published_path.to_path_buf();
+        *served_path = published_path.to_owned();
     }
 }
 
@@ -263,11 +255,13 @@ mod tests {
     use std::sync::{Arc, RwLock};
     use std::time::Duration;
 
+    use camino::Utf8PathBuf;
     use nix_search_index::IndexStore;
     use nix_search_index_test_support::{
         assert_canonical_manifest_targets, publish_canonical_index,
         publish_canonical_index_with_generated_at,
     };
+    use nix_search_test_support::utf8_path_buf;
     use tempfile::tempdir;
     use time::Duration as TimeDuration;
 
@@ -315,26 +309,27 @@ mod tests {
 
     #[test]
     fn reconcile_updates_changed_path() {
-        let path = Arc::new(RwLock::new(std::path::PathBuf::from("/old")));
+        let path = Arc::new(RwLock::new(Utf8PathBuf::from("/old")));
 
-        reconcile_served_generation(&path, std::path::Path::new("/new"));
+        reconcile_served_generation(&path, camino::Utf8Path::new("/new"));
 
-        assert_eq!(*path.read().unwrap(), std::path::PathBuf::from("/new"));
+        assert_eq!(*path.read().unwrap(), Utf8PathBuf::from("/new"));
     }
 
     #[test]
     fn reconcile_keeps_current_path() {
-        let path = Arc::new(RwLock::new(std::path::PathBuf::from("/current")));
+        let path = Arc::new(RwLock::new(Utf8PathBuf::from("/current")));
 
-        reconcile_served_generation(&path, std::path::Path::new("/current"));
+        reconcile_served_generation(&path, camino::Utf8Path::new("/current"));
 
-        assert_eq!(*path.read().unwrap(), std::path::PathBuf::from("/current"));
+        assert_eq!(*path.read().unwrap(), Utf8PathBuf::from("/current"));
     }
 
     #[test]
     fn read_current_generation_returns_missing_when_current_absent() {
         let tempdir = tempdir().unwrap();
-        let store = IndexStore::new(tempdir.path()).unwrap();
+        let index_dir = utf8_path_buf(tempdir.path().to_path_buf());
+        let store = IndexStore::new(&index_dir);
 
         let generation = read_current_generation(&store).unwrap();
 
@@ -344,23 +339,25 @@ mod tests {
     #[test]
     fn read_current_generation_loads_manifest() {
         let tempdir = tempdir().unwrap();
-        let published_path = publish_canonical_index(tempdir.path());
-        let store = IndexStore::new(tempdir.path()).unwrap();
+        let index_dir = utf8_path_buf(tempdir.path().to_path_buf());
+        let published_path = publish_canonical_index(index_dir.as_std_path());
+        let store = IndexStore::new(&index_dir);
 
         let generation = read_current_generation(&store).unwrap();
 
         let CurrentGeneration::Found(generation) = generation else {
             panic!("expected published generation");
         };
-        assert_eq!(generation.path, published_path);
+        assert_eq!(generation.path.as_std_path(), published_path);
         assert_canonical_manifest_targets(&generation.manifest);
     }
 
     #[test]
     fn read_current_generation_errors_on_empty_current() {
         let tempdir = tempdir().unwrap();
-        let store = IndexStore::new(tempdir.path()).unwrap();
-        fs::create_dir_all(tempdir.path()).unwrap();
+        let index_dir = utf8_path_buf(tempdir.path().to_path_buf());
+        let store = IndexStore::new(&index_dir);
+        fs::create_dir_all(&index_dir).unwrap();
         fs::write(store.current_file(), "").unwrap();
 
         let error = read_current_generation(&store).unwrap_err();
@@ -372,8 +369,12 @@ mod tests {
     fn current_generation_is_due_returns_true_for_stale_generation() {
         let tempdir = tempdir().unwrap();
         let now = time::OffsetDateTime::UNIX_EPOCH + TimeDuration::hours(2);
-        publish_canonical_index_with_generated_at(tempdir.path(), now - TimeDuration::hours(2));
-        let store = IndexStore::new(tempdir.path()).unwrap();
+        let index_dir = utf8_path_buf(tempdir.path().to_path_buf());
+        publish_canonical_index_with_generated_at(
+            index_dir.as_std_path(),
+            now - TimeDuration::hours(2),
+        );
+        let store = IndexStore::new(&index_dir);
 
         let due = current_generation_is_due(&store, Duration::from_secs(60 * 60), now).unwrap();
 
@@ -384,8 +385,9 @@ mod tests {
     fn current_generation_is_due_returns_false_for_fresh_generation() {
         let tempdir = tempdir().unwrap();
         let now = time::OffsetDateTime::UNIX_EPOCH + TimeDuration::hours(2);
-        publish_canonical_index_with_generated_at(tempdir.path(), now);
-        let store = IndexStore::new(tempdir.path()).unwrap();
+        let index_dir = utf8_path_buf(tempdir.path().to_path_buf());
+        publish_canonical_index_with_generated_at(index_dir.as_std_path(), now);
+        let store = IndexStore::new(&index_dir);
 
         let due = current_generation_is_due(&store, Duration::from_secs(60 * 60), now).unwrap();
 
@@ -395,7 +397,8 @@ mod tests {
     #[test]
     fn current_generation_is_due_returns_true_when_current_missing() {
         let tempdir = tempdir().unwrap();
-        let store = IndexStore::new(tempdir.path()).unwrap();
+        let index_dir = utf8_path_buf(tempdir.path().to_path_buf());
+        let store = IndexStore::new(&index_dir);
 
         let due = current_generation_is_due(
             &store,
@@ -410,8 +413,9 @@ mod tests {
     #[test]
     fn current_generation_is_due_returns_true_for_invalid_current() {
         let tempdir = tempdir().unwrap();
-        let store = IndexStore::new(tempdir.path()).unwrap();
-        fs::create_dir_all(tempdir.path()).unwrap();
+        let index_dir = utf8_path_buf(tempdir.path().to_path_buf());
+        let store = IndexStore::new(&index_dir);
+        fs::create_dir_all(&index_dir).unwrap();
         let missing = store.generations_dir().join("missing");
         fs::write(store.current_file(), missing.as_str().as_bytes()).unwrap();
 

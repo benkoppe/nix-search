@@ -204,12 +204,8 @@ fn run_search(state: &AppState, request: &PageRequest, offset: usize) -> Result<
         .expect("index path lock poisoned")
         .clone();
 
-    let index = SearchIndex::open(&index_path).with_context(|| {
-        format!(
-            "failed to open current search index {}",
-            index_path.display()
-        )
-    })?;
+    let index = SearchIndex::open(&index_path)
+        .with_context(|| format!("failed to open current search index {}", index_path))?;
 
     // source=all overrides path-based source filter
     let effective_source = match request.query.source {

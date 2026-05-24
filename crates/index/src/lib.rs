@@ -552,12 +552,9 @@ pub struct IndexStore {
 }
 
 impl IndexStore {
-    pub fn new(root: impl AsRef<Path>) -> Result<Self> {
-        let root = Utf8PathBuf::from_path_buf(root.as_ref().to_path_buf()).map_err(|root| {
-            anyhow::anyhow!("index root path is not valid UTF-8: {}", root.display())
-        })?;
-
-        Ok(Self { root })
+    pub fn new(root: impl AsRef<Utf8Path>) -> Self {
+        let root = root.as_ref().to_owned();
+        Self { root }
     }
 
     pub fn root(&self) -> &Utf8Path {
@@ -637,24 +634,18 @@ impl IndexStore {
 
     fn validate_generation_path(&self, generation_path: &Utf8Path) -> Result<Utf8PathBuf> {
         let generation_path = generation_path
-            .canonicalize()
-            .with_context(|| format!("failed to canonicalize {}", generation_path.as_str()))?;
-        let generation_path = Utf8PathBuf::from_path_buf(generation_path).map_err(|path| {
-            anyhow::anyhow!("generation path is not valid UTF-8: {}", path.display())
-        })?;
+            .canonicalize_utf8()
+            .with_context(|| format!("failed to canonicalize {generation_path}"))?;
 
-        let generations_dir = self.generations_dir().canonicalize().with_context(|| {
-            format!(
-                "failed to canonicalize generations dir {}",
-                self.generations_dir().as_str()
-            )
-        })?;
-        let generations_dir = Utf8PathBuf::from_path_buf(generations_dir).map_err(|path| {
-            anyhow::anyhow!(
-                "generations dir path is not valid UTF-8: {}",
-                path.display()
-            )
-        })?;
+        let generations_dir = self
+            .generations_dir()
+            .canonicalize_utf8()
+            .with_context(|| {
+                format!(
+                    "failed to canonicalize generations dir {}",
+                    self.generations_dir()
+                )
+            })?;
 
         if !generation_path.starts_with(&generations_dir) {
             anyhow::bail!(
@@ -862,17 +853,25 @@ mod tests {
     use std::fs;
 
     use camino::Utf8PathBuf;
-    use tempfile::tempdir;
+    use tempfile::{TempDir, tempdir};
 
     use nix_search_core::ArtifactKind;
 
     const SOURCE_FIXTURES: &str = "fixtures";
     const REF_SMALL: &str = "small";
 
+    fn utf8_path(path: std::path::PathBuf) -> Utf8PathBuf {
+        Utf8PathBuf::from_path_buf(path).expect("test path must be valid UTF-8")
+    }
+
+    fn store_for(tempdir: &TempDir) -> super::IndexStore {
+        super::IndexStore::new(utf8_path(tempdir.path().to_path_buf()))
+    }
+
     #[test]
     fn index_store_publishes_current_generation() {
         let tempdir = tempdir().unwrap();
-        let store = super::IndexStore::new(tempdir.path()).unwrap();
+        let store = store_for(&tempdir);
 
         let generation = store.create_generation_path().unwrap();
         assert!(generation.exists());
@@ -881,13 +880,13 @@ mod tests {
 
         let current = store.current_path().unwrap();
 
-        assert_eq!(current, generation.canonicalize().unwrap());
+        assert_eq!(current, generation.canonicalize_utf8().unwrap());
     }
 
     #[test]
     fn index_store_creates_distinct_generation_paths() {
         let tempdir = tempdir().unwrap();
-        let store = super::IndexStore::new(tempdir.path()).unwrap();
+        let store = store_for(&tempdir);
 
         let first = store.create_generation_path().unwrap();
         let second = store.create_generation_path().unwrap();
@@ -900,7 +899,7 @@ mod tests {
     #[test]
     fn index_store_publish_updates_current_generation() {
         let tempdir = tempdir().unwrap();
-        let store = super::IndexStore::new(tempdir.path()).unwrap();
+        let store = store_for(&tempdir);
 
         let first = store.create_generation_path().unwrap();
         let second = store.create_generation_path().unwrap();
@@ -910,14 +909,14 @@ mod tests {
 
         assert_eq!(
             store.current_path().unwrap(),
-            second.canonicalize().unwrap()
+            second.canonicalize_utf8().unwrap()
         );
     }
 
     #[test]
     fn index_store_publish_removes_temporary_current_file_on_success() {
         let tempdir = tempdir().unwrap();
-        let store = super::IndexStore::new(tempdir.path()).unwrap();
+        let store = store_for(&tempdir);
         let generation = store.create_generation_path().unwrap();
 
         store.publish(&generation).unwrap();
@@ -939,7 +938,7 @@ mod tests {
     #[test]
     fn index_store_publish_rejects_paths_outside_generations_dir() {
         let tempdir = tempdir().unwrap();
-        let store = super::IndexStore::new(tempdir.path().join("indexes")).unwrap();
+        let store = super::IndexStore::new(utf8_path(tempdir.path().join("indexes")));
         store.create_generation_path().unwrap();
         let external_generation =
             Utf8PathBuf::from_path_buf(tempdir.path().join("external-generation")).unwrap();
@@ -953,7 +952,7 @@ mod tests {
     #[test]
     fn index_store_publish_rejects_generations_dir_itself() {
         let tempdir = tempdir().unwrap();
-        let store = super::IndexStore::new(tempdir.path()).unwrap();
+        let store = store_for(&tempdir);
         store.create_generation_path().unwrap();
 
         let error = store.publish(&store.generations_dir()).unwrap_err();
@@ -964,7 +963,7 @@ mod tests {
     #[test]
     fn index_store_publish_rejects_nested_generation_path() {
         let tempdir = tempdir().unwrap();
-        let store = super::IndexStore::new(tempdir.path()).unwrap();
+        let store = store_for(&tempdir);
         let generation = store.create_generation_path().unwrap();
         let nested = generation.join("nested");
         fs::create_dir(&nested).unwrap();
@@ -977,7 +976,7 @@ mod tests {
     #[test]
     fn index_store_publish_rejects_file_under_generations_dir() {
         let tempdir = tempdir().unwrap();
-        let store = super::IndexStore::new(tempdir.path()).unwrap();
+        let store = store_for(&tempdir);
         store.create_generation_path().unwrap();
         let file = store.generations_dir().join("generation-file");
         fs::write(&file, b"not a directory").unwrap();
@@ -990,7 +989,7 @@ mod tests {
     #[test]
     fn index_store_current_path_preserves_whitespace() {
         let tempdir = tempdir().unwrap();
-        let store = super::IndexStore::new(tempdir.path()).unwrap();
+        let store = store_for(&tempdir);
         fs::create_dir_all(store.generations_dir()).unwrap();
         let path = store
             .generations_dir()
@@ -998,13 +997,16 @@ mod tests {
         fs::create_dir(&path).unwrap();
         fs::write(store.current_file(), path.as_str().as_bytes()).unwrap();
 
-        assert_eq!(store.current_path().unwrap(), path.canonicalize().unwrap());
+        assert_eq!(
+            store.current_path().unwrap(),
+            path.canonicalize_utf8().unwrap()
+        );
     }
 
     #[test]
     fn index_store_current_path_rejects_non_utf8_current_file() {
         let tempdir = tempdir().unwrap();
-        let store = super::IndexStore::new(tempdir.path()).unwrap();
+        let store = store_for(&tempdir);
         fs::write(store.current_file(), b"\xff").unwrap();
 
         let error = store.current_path().unwrap_err();
@@ -1015,7 +1017,7 @@ mod tests {
     #[test]
     fn index_store_current_path_rejects_paths_outside_generations_dir() {
         let tempdir = tempdir().unwrap();
-        let store = super::IndexStore::new(tempdir.path().join("indexes")).unwrap();
+        let store = super::IndexStore::new(utf8_path(tempdir.path().join("indexes")));
         store.create_generation_path().unwrap();
         let external_generation =
             Utf8PathBuf::from_path_buf(tempdir.path().join("external-generation")).unwrap();
@@ -1034,7 +1036,7 @@ mod tests {
     #[test]
     fn index_store_current_path_rejects_nested_generation_path() {
         let tempdir = tempdir().unwrap();
-        let store = super::IndexStore::new(tempdir.path()).unwrap();
+        let store = store_for(&tempdir);
         let generation = store.create_generation_path().unwrap();
         let nested = generation.join("nested");
         fs::create_dir(&nested).unwrap();
@@ -1048,7 +1050,7 @@ mod tests {
     #[test]
     fn index_store_current_path_rejects_missing_generation_path() {
         let tempdir = tempdir().unwrap();
-        let store = super::IndexStore::new(tempdir.path()).unwrap();
+        let store = store_for(&tempdir);
         store.create_generation_path().unwrap();
         let missing = store.generations_dir().join("missing-generation");
         fs::write(store.current_file(), missing.as_str().as_bytes()).unwrap();
@@ -1061,7 +1063,7 @@ mod tests {
     #[test]
     fn index_store_current_path_rejects_file_under_generations_dir() {
         let tempdir = tempdir().unwrap();
-        let store = super::IndexStore::new(tempdir.path()).unwrap();
+        let store = store_for(&tempdir);
         store.create_generation_path().unwrap();
         let file = store.generations_dir().join("generation-file");
         fs::write(&file, b"not a directory").unwrap();
@@ -1075,7 +1077,7 @@ mod tests {
     #[test]
     fn index_store_try_current_path_returns_none_when_current_is_missing() {
         let tempdir = tempdir().unwrap();
-        let store = super::IndexStore::new(tempdir.path()).unwrap();
+        let store = store_for(&tempdir);
 
         assert_eq!(store.try_current_path().unwrap(), None);
     }
@@ -1083,7 +1085,7 @@ mod tests {
     #[test]
     fn index_store_current_path_errors_with_update_hint_when_current_is_missing() {
         let tempdir = tempdir().unwrap();
-        let store = super::IndexStore::new(tempdir.path()).unwrap();
+        let store = store_for(&tempdir);
 
         let error = store.current_path().unwrap_err();
 
@@ -1093,7 +1095,7 @@ mod tests {
     #[test]
     fn index_store_current_path_errors_when_current_is_empty() {
         let tempdir = tempdir().unwrap();
-        let store = super::IndexStore::new(tempdir.path()).unwrap();
+        let store = store_for(&tempdir);
         fs::write(store.current_file(), b"").unwrap();
 
         let error = store.current_path().unwrap_err();
@@ -1104,7 +1106,7 @@ mod tests {
     #[test]
     fn index_store_writes_and_reads_generation_manifest() {
         let tempdir = tempdir().unwrap();
-        let store = super::IndexStore::new(tempdir.path()).unwrap();
+        let store = store_for(&tempdir);
 
         let generation = store.create_generation_path().unwrap();
 
@@ -1148,7 +1150,7 @@ mod tests {
     #[test]
     fn index_store_write_manifest_rejects_paths_outside_generations_dir() {
         let tempdir = tempdir().unwrap();
-        let store = super::IndexStore::new(tempdir.path().join("indexes")).unwrap();
+        let store = super::IndexStore::new(utf8_path(tempdir.path().join("indexes")));
         store.create_generation_path().unwrap();
         let external_generation =
             Utf8PathBuf::from_path_buf(tempdir.path().join("external-generation")).unwrap();
@@ -1165,7 +1167,7 @@ mod tests {
     #[test]
     fn index_store_write_manifest_rejects_nested_generation_path() {
         let tempdir = tempdir().unwrap();
-        let store = super::IndexStore::new(tempdir.path()).unwrap();
+        let store = store_for(&tempdir);
         let generation = store.create_generation_path().unwrap();
         let nested = generation.join("nested");
         fs::create_dir(&nested).unwrap();
@@ -1179,7 +1181,7 @@ mod tests {
     #[test]
     fn index_store_returns_none_when_current_manifest_is_missing() {
         let tempdir = tempdir().unwrap();
-        let store = super::IndexStore::new(tempdir.path()).unwrap();
+        let store = store_for(&tempdir);
 
         let manifest = store.try_current_manifest().unwrap();
 

@@ -6,6 +6,7 @@ license.workspace = true
 publish = false
 
 [dependencies]
+camino.workspace = true
 nix-search-core.workspace = true
 nix-search-index.workspace = true
 nix-search-test-support.workspace = true

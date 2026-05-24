@@ -58,7 +58,7 @@ urlencoding = "2"
 html-escape = "0.2"
 maud = { version = "0.27", features = ["axum"] }
 bytes = "1"
-camino = "1"
+camino = { version = "1", features = ["serde1"] }
 hex = "0.4"
 sha2 = "0.11"
 

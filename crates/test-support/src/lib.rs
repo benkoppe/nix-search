@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 
+use camino::{Utf8Path, Utf8PathBuf};
 use tempfile::TempDir;
 
 use nix_search_config::{
@@ -164,11 +165,11 @@ pub fn canonical_documents() -> Vec<SearchDocument> {
     ]
 }
 
-pub fn app_config(index_dir: impl Into<PathBuf>) -> AppConfig {
+pub fn app_config(index_dir: impl AsRef<Utf8Path>) -> AppConfig {
     AppConfig {
         data: DataConfig {
             artifact_url: "file://./data/artifacts".to_owned(),
-            index_dir: index_dir.into(),
+            index_dir: index_dir.as_ref().to_owned(),
         },
         server: ServerConfig::default(),
         sources: [(
@@ -195,6 +196,10 @@ pub fn app_config(index_dir: impl Into<PathBuf>) -> AppConfig {
         )]
         .into(),
     }
+}
+
+pub fn utf8_path_buf(path: PathBuf) -> Utf8PathBuf {
+    Utf8PathBuf::from_path_buf(path).expect("test path must be valid UTF-8")
 }
 
 pub fn config_toml(index_dir: &Path) -> String {

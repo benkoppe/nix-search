@@ -5,6 +5,7 @@
 
 use std::path::{Path, PathBuf};
 
+use camino::Utf8Path;
 use nix_search_core::{ArtifactKind, SearchDocument};
 use nix_search_index::{IndexGenerationManifest, IndexStore, IndexTargetManifest, SearchIndex};
 use nix_search_test_support::{REF_SMALL, SOURCE_FIXTURES, canonical_documents};
@@ -96,7 +97,8 @@ fn publish_documents_with_manifest_targets(
     documents: Vec<SearchDocument>,
     targets: Vec<IndexTargetManifest>,
 ) -> PathBuf {
-    let store = IndexStore::new(index_root).unwrap();
+    let index_root = Utf8Path::from_path(index_root).expect("index root must be valid UTF-8");
+    let store = IndexStore::new(index_root);
     let generation = store.create_generation_path().unwrap();
 
     let index = SearchIndex::create_or_replace(&generation).unwrap();
