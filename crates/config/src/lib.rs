@@ -136,7 +136,7 @@ impl AppConfig {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 struct RawAppConfig {
     data: DataConfig,
     server: ServerConfig,
@@ -160,7 +160,7 @@ impl RawAppConfig {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct DataConfig {
     pub artifact_url: String,
     pub index_dir: Utf8PathBuf,
@@ -190,7 +190,7 @@ impl DataConfig {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct ServerConfig {
     pub listen: String,
     pub bootstrap: bool,
@@ -215,7 +215,7 @@ impl ServerConfig {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct ScheduleConfig {
     pub enabled: bool,
     pub interval: String,
@@ -294,7 +294,7 @@ fn parse_duration(s: &str) -> std::result::Result<Duration, String> {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 struct RawSourceConfig {
     name: Option<String>,
     color: Option<String>,
@@ -306,6 +306,7 @@ struct RawSourceConfig {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct RawRefConfig {
     pub producer: ProducerConfig,
     #[serde(default)]
@@ -574,7 +575,7 @@ impl RefConfig {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "kebab-case")]
+#[serde(tag = "type", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum ProducerConfig {
     ExistingFile {
         path: PathBuf,
@@ -1025,14 +1026,18 @@ mod tests {
             [sources.fixtures]
             name = "Fixtures"
             kind = "options"
+
             [sources.fixtures.refs.small.producer]
             type = "download"
             url = "https://example.com/options.json"
             artifact = "options-json"
             "#,
         );
+
         let producer = &config.sources[FIXTURES_SOURCE].refs[0].producer;
+
         assert_eq!(producer.kind(), ProducerKind::Download);
+
         match producer {
             ProducerConfig::Download {
                 url,
