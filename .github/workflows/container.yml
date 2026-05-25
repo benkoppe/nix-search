@@ -1,0 +1,107 @@
+name: Container
+
+on:
+  push:
+    branches:
+      - "**"
+    tags:
+      - "v*"
+  pull_request:
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  build:
+    name: Build ${{ matrix.nix-system }}
+    runs-on: ${{ matrix.runner }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - nix-system: x86_64-linux
+            runner: ubuntu-latest
+            arch: amd64
+          - nix-system: aarch64-linux
+            runner: ubuntu-24.04-arm
+            arch: arm64
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+
+      - name: Build images
+        run: |
+          nix build -L ".#packages.${{ matrix.nix-system }}.container" \
+            --out-link "result-container-${{ matrix.arch }}"
+
+          nix build -L ".#packages.${{ matrix.nix-system }}.containerWithNix" \
+            --out-link "result-container-with-nix-${{ matrix.arch }}"
+
+      - name: Push arch images
+        if: github.event_name != 'pull_request'
+        run: |
+          image="${REGISTRY}/${GITHUB_REPOSITORY,,}"
+          image_with_nix="${image}-with-nix"
+          nix shell nixpkgs#skopeo
+
+          echo "${{ github.token }}" | skopeo login ghcr.io \
+            --username "${{ github.actor }}" \
+            --password-stdin
+
+          skopeo copy \
+            "docker-archive:$(readlink -f "result-container-${{ matrix.arch }}")" \
+            "docker://${image}:sha-${GITHUB_SHA}-${{ matrix.arch }}"
+
+          skopeo copy \
+            "docker-archive:$(readlink -f "result-container-with-nix-${{ matrix.arch }}")" \
+            "docker://${image_with_nix}:sha-${GITHUB_SHA}-${{ matrix.arch }}"
+
+  manifest:
+    name: Publish ${{ matrix.name }} manifest
+    needs: build
+    runs-on: ubuntu-latest
+
+    if: github.event_name != 'pull_request'
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: container
+            image: ghcr.io/${{ github.repository }}
+          - name: container-with-nix
+            image: ghcr.io${{ github.repository }}-with-nix
+
+    steps:
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ matrix.image }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=tag
+            type=sha,prefix=sha-,format=short
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Publish manifest
+        run: |
+          docker buildx imagetools create \
+            $(printf -- '-t %s ' ${{ steps.meta.outputs.tags }}) \
+            "${{ matrix.image }}:sha-${GITHUB_SHA}-amd64" \
+            "${{ matrix.image }}:sha-${GITHUB_SHA}-arm64"
