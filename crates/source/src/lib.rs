@@ -11,6 +11,11 @@ use nix_search_core::{ArtifactKind, IngestContext, SearchDocument};
 use nix_search_ingest::{parse_options_json, parse_packages_json};
 use nix_search_store::{ArtifactMetadata, ArtifactMetadataInput, ArtifactRef, ArtifactStore};
 
+const CHANNELS_BASE_URL: &str = "https://channels.nixos.org";
+const CHANNEL_PACKAGES_FILE: &str = "packages.json.br";
+const CHANNEL_OPTIONS_FILE: &str = "options.json.br";
+const CHANNEL_GIT_REVISION_FILE: &str = "git-revision";
+
 #[derive(Debug, Clone)]
 pub struct ProduceRequest {
     pub source: String,
@@ -453,12 +458,9 @@ impl ChannelPackagesJsonProducer {
     }
 
     fn url(&self) -> String {
-        self.url.clone().unwrap_or_else(|| {
-            format!(
-                "https://channels.nixos.org/{}/packages.json.br",
-                self.channel
-            )
-        })
+        self.url
+            .clone()
+            .unwrap_or_else(|| channel_artifact_url(&self.channel, CHANNEL_PACKAGES_FILE))
     }
 }
 
@@ -470,38 +472,18 @@ impl Producer for ChannelPackagesJsonProducer {
         request: &ProduceRequest,
     ) -> Result<ProducedArtifact> {
         let url = self.url();
-
-        let compressed = reqwest::get(&url)
+        let bytes = fetch_brotli_artifact(&url)
             .await
-            .with_context(|| format!("failed to fetch {url}"))?
-            .error_for_status()
-            .with_context(|| format!("HTTP error fetching {url}"))?
-            .bytes()
-            .await
-            .with_context(|| format!("failed to read response body from {url}"))?;
-
-        let decompressed = decompress_brotli(&compressed)
-            .with_context(|| format!("failed to decompress Brotli response from {url}"))?;
+            .with_context(|| format!("failed to fetch channel packages artifact from {url}"))?;
 
         let artifact_ref = request.artifact_ref(ArtifactKind::PackagesJson);
 
         let mut metadata_input = ArtifactMetadataInput::new(self.producer_name.clone());
         metadata_input.source_url = Some(url.clone());
-
-        match fetch_channel_git_revision(&self.channel).await {
-            Ok(Some(revision)) => metadata_input.revision = Some(revision),
-            Ok(None) => metadata_input.warnings.push(format!(
-                "channel git-revision was empty for channel {:?}",
-                self.channel
-            )),
-            Err(error) => metadata_input.warnings.push(format!(
-                "failed to fetch channel git-revision for channel {:?}: {error:#}",
-                self.channel
-            )),
-        }
+        populate_channel_revision(&mut metadata_input, &self.channel).await;
 
         let metadata = store
-            .put_artifact(&artifact_ref, Bytes::from(decompressed), metadata_input)
+            .put_artifact(&artifact_ref, Bytes::from(bytes), metadata_input)
             .await
             .context("failed to write packages artifact to store")?;
 
@@ -510,6 +492,77 @@ impl Producer for ChannelPackagesJsonProducer {
             metadata,
         })
     }
+}
+
+#[derive(Debug, Clone)]
+pub struct ChannelOptionsJsonProducer {
+    channel: String,
+    url: Option<String>,
+    producer_name: String,
+}
+
+impl ChannelOptionsJsonProducer {
+    pub fn new(channel: impl Into<String>, url: Option<String>) -> Self {
+        Self {
+            channel: channel.into(),
+            url,
+            producer_name: "channel-options-json".to_owned(),
+        }
+    }
+
+    fn url(&self) -> String {
+        self.url
+            .clone()
+            .unwrap_or_else(|| channel_artifact_url(&self.channel, CHANNEL_OPTIONS_FILE))
+    }
+}
+
+#[async_trait]
+impl Producer for ChannelOptionsJsonProducer {
+    async fn produce(
+        &self,
+        store: &ArtifactStore,
+        request: &ProduceRequest,
+    ) -> Result<ProducedArtifact> {
+        let url = self.url();
+        let bytes = fetch_brotli_artifact(&url)
+            .await
+            .with_context(|| format!("failed to fetch channel options artifact from {url}"))?;
+
+        let artifact_ref = request.artifact_ref(ArtifactKind::OptionsJson);
+
+        let mut metadata_input = ArtifactMetadataInput::new(self.producer_name.clone());
+        metadata_input.source_url = Some(url.clone());
+        populate_channel_revision(&mut metadata_input, &self.channel).await;
+
+        let metadata = store
+            .put_artifact(&artifact_ref, Bytes::from(bytes), metadata_input)
+            .await
+            .context("failed to write options artifact to store")?;
+
+        Ok(ProducedArtifact {
+            artifact_ref,
+            metadata,
+        })
+    }
+}
+
+fn channel_artifact_url(channel: &str, file_name: &str) -> String {
+    format!("{CHANNELS_BASE_URL}/{channel}/{file_name}")
+}
+
+async fn fetch_brotli_artifact(url: &str) -> Result<Vec<u8>> {
+    let compressed = reqwest::get(url)
+        .await
+        .with_context(|| format!("failed to fetch {url}"))?
+        .error_for_status()
+        .with_context(|| format!("HTTP error fetching {url}"))?
+        .bytes()
+        .await
+        .with_context(|| format!("failed to read response body from {url}"))?;
+
+    decompress_brotli(&compressed)
+        .with_context(|| format!("failed to decompress Brotli response from {url}"))
 }
 
 fn decompress_brotli(bytes: &[u8]) -> Result<Vec<u8>> {
@@ -521,6 +574,18 @@ fn decompress_brotli(bytes: &[u8]) -> Result<Vec<u8>> {
         .context("Brotli decompression failed")?;
 
     Ok(output)
+}
+
+async fn populate_channel_revision(metadata_input: &mut ArtifactMetadataInput, channel: &str) {
+    match fetch_channel_git_revision(channel).await {
+        Ok(Some(revision)) => metadata_input.revision = Some(revision),
+        Ok(None) => metadata_input.warnings.push(format!(
+            "channel git-revision was empty for channel {channel:?}"
+        )),
+        Err(error) => metadata_input.warnings.push(format!(
+            "failed to fetch channel git-revision for channel {channel:?}: {error:#}"
+        )),
+    }
 }
 
 #[derive(Debug, Default, Clone)]
@@ -626,7 +691,7 @@ fn parse_flake_metadata_revision(bytes: &[u8]) -> Result<Option<String>> {
 }
 
 fn channel_git_revision_url(channel: &str) -> String {
-    format!("https://channels.nixos.org/{channel}/git-revision")
+    channel_artifact_url(channel, CHANNEL_GIT_REVISION_FILE)
 }
 
 async fn fetch_channel_git_revision(channel: &str) -> Result<Option<String>> {
@@ -662,7 +727,7 @@ mod tests {
         OPTION_GIT_ENABLE, OPTION_NGINX_ENABLE, REF_SMALL, SOURCE_FIXTURES,
     };
 
-    use crate::ChannelPackagesJsonProducer;
+    use crate::{ChannelOptionsJsonProducer, ChannelPackagesJsonProducer};
 
     use super::{
         Consumer, EvalModulesProducer, ExistingFileProducer, OptionsJsonConsumer, ProduceRequest,
@@ -819,6 +884,16 @@ mod tests {
         assert_eq!(
             producer.url(),
             "https://channels.nixos.org/nixos-unstable/packages.json.br"
+        );
+    }
+
+    #[test]
+    fn channel_options_json_producer_builds_default_url() {
+        let producer = ChannelOptionsJsonProducer::new("nixos-unstable", None);
+
+        assert_eq!(
+            producer.url(),
+            "https://channels.nixos.org/nixos-unstable/options.json.br"
         );
     }
 

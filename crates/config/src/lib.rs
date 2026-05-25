@@ -420,11 +420,9 @@ impl RawSourceConfig {
             .map(|ref_id| RefConfig {
                 id: ref_id.clone(),
                 source_links: Some(nixpkgs_source_links(&ref_id)),
-                producer: ProducerConfig::NixBuildOptionsJson {
-                    source_ref: format!("github:NixOS/nixpkgs/{ref_id}"),
-                    attribute: "options".to_owned(),
-                    import_path: "nixos/release.nix".to_owned(),
-                    output_path: "share/doc/nixos/options.json".to_owned(),
+                producer: ProducerConfig::ChannelOptionsJson {
+                    channel: ref_id,
+                    url: None,
                 },
             })
             .collect::<Vec<_>>();
@@ -589,6 +587,12 @@ pub enum ProducerConfig {
         url: Option<String>,
     },
 
+    ChannelOptionsJson {
+        channel: String,
+        #[serde(default)]
+        url: Option<String>,
+    },
+
     NixBuildOptionsJson {
         #[serde(rename = "ref")]
         source_ref: String,
@@ -631,6 +635,14 @@ impl ProducerConfig {
             }
 
             Self::ChannelPackagesJson { channel, url } => {
+                validate_producer_non_empty(source_id, ref_id, "channel", channel)?;
+
+                if let Some(url) = url {
+                    validate_producer_non_empty(source_id, ref_id, "url", url)?;
+                }
+            }
+
+            Self::ChannelOptionsJson { channel, url } => {
                 validate_producer_non_empty(source_id, ref_id, "channel", channel)?;
 
                 if let Some(url) = url {
@@ -689,6 +701,7 @@ impl ProducerConfig {
         match self {
             Self::ExistingFile { .. } => ProducerKind::ExistingFile,
             Self::ChannelPackagesJson { .. } => ProducerKind::ChannelPackagesJson,
+            Self::ChannelOptionsJson { .. } => ProducerKind::ChannelOptionsJson,
             Self::NixBuildOptionsJson { .. } => ProducerKind::NixBuildOptionsJson,
             Self::EvalModules { .. } => ProducerKind::EvalModules,
             Self::Download { .. } => ProducerKind::Download,
@@ -703,6 +716,7 @@ impl ProducerConfig {
 pub enum ProducerKind {
     ExistingFile,
     ChannelPackagesJson,
+    ChannelOptionsJson,
     NixBuildOptionsJson,
     EvalModules,
     Download,
@@ -1133,10 +1147,15 @@ mod tests {
         let ref_config = &source.refs[0];
 
         assert_eq!(ref_config.id, NIXOS_UNSTABLE_REF);
-        assert_eq!(
-            ref_config.producer.kind(),
-            ProducerKind::NixBuildOptionsJson
-        );
+        assert_eq!(ref_config.producer.kind(), ProducerKind::ChannelOptionsJson);
+
+        match &ref_config.producer {
+            ProducerConfig::ChannelOptionsJson { channel, url } => {
+                assert_eq!(channel, NIXOS_UNSTABLE_REF);
+                assert_eq!(url, &None);
+            }
+            other => panic!("unexpected producer: {other:?}"),
+        }
     }
 
     #[test]
@@ -1207,8 +1226,9 @@ mod tests {
         assert_eq!(source.refs[1].id, NIXOS_STABLE_REF);
 
         match &source.refs[1].producer {
-            ProducerConfig::NixBuildOptionsJson { source_ref, .. } => {
-                assert_eq!(source_ref, "github:NixOS/nixpkgs/nixos-25.11");
+            ProducerConfig::ChannelOptionsJson { channel, url } => {
+                assert_eq!(channel, NIXOS_STABLE_REF);
+                assert_eq!(url, &None);
             }
             other => panic!("unexpected producer: {other:?}"),
         }

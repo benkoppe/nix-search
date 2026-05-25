@@ -5,8 +5,8 @@ use anyhow::{Context, Result, bail};
 use nix_search_config::{AppConfig, ProducerConfig};
 use nix_search_core::ArtifactKind;
 use nix_search_source::{
-    ChannelPackagesJsonProducer, EvalModulesProducer, ExistingFileProducer,
-    NixBuildOptionsJsonProducer, ProduceRequest, ProducedArtifact, Producer,
+    ChannelOptionsJsonProducer, ChannelPackagesJsonProducer, EvalModulesProducer,
+    ExistingFileProducer, NixBuildOptionsJsonProducer, ProduceRequest, ProducedArtifact, Producer,
 };
 use nix_search_store::{ArtifactRef, ArtifactStore};
 
@@ -53,6 +53,17 @@ pub async fn produce_target(store: &ArtifactStore, target: &TargetRef) -> Result
             producer.produce(store, &request).await.with_context(|| {
                 format!(
                     "failed to produce channel packages artifact for {}/{}",
+                    target.source_id, target.ref_config.id
+                )
+            })
+        }
+
+        ProducerConfig::ChannelOptionsJson { channel, url } => {
+            let producer = ChannelOptionsJsonProducer::new(channel, url.clone());
+
+            producer.produce(store, &request).await.with_context(|| {
+                format!(
+                    "failed to produce channel options artifact for {}/{}",
                     target.source_id, target.ref_config.id
                 )
             })
@@ -110,6 +121,7 @@ pub fn artifact_kind_for_producer(producer: &ProducerConfig) -> ArtifactKind {
     match producer {
         ProducerConfig::ExistingFile { artifact, .. } => *artifact,
         ProducerConfig::ChannelPackagesJson { .. } => ArtifactKind::PackagesJson,
+        ProducerConfig::ChannelOptionsJson { .. } => ArtifactKind::OptionsJson,
         ProducerConfig::NixBuildOptionsJson { .. } => ArtifactKind::OptionsJson,
         ProducerConfig::EvalModules { .. } => ArtifactKind::OptionsJson,
         ProducerConfig::Download { artifact, .. } => *artifact,
