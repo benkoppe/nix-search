@@ -125,6 +125,32 @@ body {
   margin: 0 auto;
   padding: 0;
   margin-top: 110px;
+  padding-bottom: 2.5rem;
+}
+
+/* ─── Sticky footer ─── */
+
+.footer {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: 100;
+  background: var(--header-bg);
+  border-top: 1px solid var(--border);
+  padding: 0.5rem 1rem;
+}
+
+.footer-inner {
+  max-width: 1200px;
+  margin: 0 auto;
+  text-align: center;
+  font-size: 0.75rem;
+  color: var(--text-dim);
+}
+
+.footer-separator {
+  color: var(--border);
 }
 
 /* ─── Results table ─── */

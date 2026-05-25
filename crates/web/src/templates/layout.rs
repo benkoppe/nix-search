@@ -9,6 +9,7 @@ use crate::request::{PageRequest, SourceFilter, normalized_query};
 use crate::scripts::navigation_script;
 use crate::urls::source_path;
 
+use super::footer;
 use super::modal;
 use super::results;
 use super::search;
@@ -68,6 +69,7 @@ pub fn render_full_page(
                     (results_markup)
                     (modal_markup)
                 }
+                (footer::render_footer(state))
 
                 script #source-metadata type="application/json" {
                     (PreEscaped(&source_metadata))

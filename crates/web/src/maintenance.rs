@@ -37,7 +37,11 @@ enum MaintenanceOutcome {
     Failed,
 }
 
-pub(crate) fn spawn(config: Arc<AppConfig>, index_path: Arc<RwLock<Utf8PathBuf>>) {
+pub(crate) fn spawn(
+    config: Arc<AppConfig>,
+    index_path: Arc<RwLock<Utf8PathBuf>>,
+    generated_at: Arc<RwLock<OffsetDateTime>>,
+) {
     let interval = config
         .server
         .schedule
@@ -45,13 +49,14 @@ pub(crate) fn spawn(config: Arc<AppConfig>, index_path: Arc<RwLock<Utf8PathBuf>>
         .expect("schedule interval already validated");
 
     tokio::spawn(async move {
-        run_loop(config, index_path, interval).await;
+        run_loop(config, index_path, generated_at, interval).await;
     });
 }
 
 async fn run_loop(
     config: Arc<AppConfig>,
     index_path: Arc<RwLock<Utf8PathBuf>>,
+    generated_at: Arc<RwLock<OffsetDateTime>>,
     interval: Duration,
 ) {
     let index_store = IndexStore::new(&config.data.index_dir);
@@ -88,6 +93,7 @@ async fn run_loop(
         };
 
         reconcile_served_generation(&index_path, &generation.path);
+        reconcile_generated_at(&generated_at, generation.manifest.generated_at);
 
         if !regeneration_enabled {
             tokio::time::sleep(RECONCILE_INTERVAL).await;
@@ -225,6 +231,17 @@ pub(crate) fn reconcile_served_generation(
         );
 
         *served_path = published_path.to_owned();
+    }
+}
+
+pub(crate) fn reconcile_generated_at(
+    generated_at: &Arc<RwLock<OffsetDateTime>>,
+    manifest_generated_at: OffsetDateTime,
+) {
+    let mut current = generated_at.write().expect("generated_at lock poisoned");
+
+    if *current != manifest_generated_at {
+        *current = manifest_generated_at;
     }
 }
 
