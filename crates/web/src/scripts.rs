@@ -34,76 +34,77 @@ pub fn navigation_script() -> String {
           currentUrl = currentPublicUrl();
         }
 
-        function getSourceSelect() {
-          return document.querySelector('[data-nixsearch-input="source-path"]');
+        // ─── Source tabs ───
+
+        function getActiveSourceTab() {
+          return document.querySelector('.source-tab[data-active]');
         }
 
-        function getRefSelect() {
-          return document.querySelector('[data-nixsearch-input="ref"]');
+        function currentSourceFromTabs() {
+          const tab = getActiveSourceTab();
+          return tab ? (tab.dataset.nixsearchSource || "") : "";
+        }
+
+        function setActiveSourceTab(sourceId) {
+          document.querySelectorAll('.source-tab').forEach((tab) => {
+            if (tab.dataset.nixsearchSource === sourceId) {
+              tab.setAttribute("data-active", "");
+            } else {
+              tab.removeAttribute("data-active");
+            }
+          });
+          // Also update overflow dropdown items
+          document.querySelectorAll('.source-tabs-dropdown button').forEach((btn) => {
+            if (btn.dataset.nixsearchSource === sourceId) {
+              btn.setAttribute("data-active", "");
+            } else {
+              btn.removeAttribute("data-active");
+            }
+          });
+        }
+
+        // ─── Ref radios ───
+
+        function getRefContainer() {
+          return document.querySelector('[data-nixsearch-ref-container]');
+        }
+
+        function currentRefFromRadios() {
+          const checked = document.querySelector('[data-nixsearch-input="ref"]:checked');
+          return checked ? checked.value : "";
         }
 
         function sourceMetadata(sourceId) {
           return metadata.find((s) => s.id === sourceId);
         }
 
-        function populateRefSelect(sourceId) {
-          const refSelect = getRefSelect();
-          if (!refSelect) return;
-
-          if (refSelect.type === "hidden") {
-            const source = sourceMetadata(sourceId);
-            if (!source || source.refs.length === 0) {
-              refSelect.value = "";
-              return;
-            }
-
-            const wrapper = refSelect.closest(".header-filters") || refSelect.parentElement;
-            const newSelect = document.createElement("select");
-            newSelect.name = "ref";
-            newSelect.setAttribute("data-nixsearch-input", "ref");
-            newSelect.innerHTML = source.refs
-              .map((r) => {
-                const selected = r === source.defaultRef ? " selected" : "";
-                return `<option value="${r}"${selected}>${r}</option>`;
-              })
-              .join("");
-            refSelect.replaceWith(newSelect);
-            return;
-          }
+        function populateRefRadios(sourceId) {
+          const container = getRefContainer();
+          if (!container) return;
 
           const source = sourceMetadata(sourceId);
 
           if (!source || source.refs.length === 0) {
-            refSelect.innerHTML = "";
-            refSelect.style.display = "none";
+            container.innerHTML = "";
             return;
           }
 
-          refSelect.style.display = "";
-          refSelect.innerHTML = source.refs
+          container.innerHTML = source.refs
             .map((r) => {
-              const selected = r === source.defaultRef ? " selected" : "";
-              return `<option value="${r}"${selected}>${r}</option>`;
+              const checked = r === source.defaultRef ? " checked" : "";
+              return `<label class="ref-radio-label"><input type="radio" name="ref" value="${r}"${checked} data-nixsearch-input="ref"><span>${r}</span></label>`;
             })
             .join("");
         }
 
-        function currentSourceFromSelect() {
-          const sel = getSourceSelect();
-          return sel ? sel.value : "";
-        }
-
-        function currentRefFromSelect() {
-          const sel = getRefSelect();
-          return sel ? sel.value : "";
-        }
+        // ─── URL building ───
 
         function sourcePath(sourceId) {
           return sourceId ? "/" + encodeURIComponent(sourceId) : "/";
         }
 
         function buildSearchUrlFromInputs() {
-          const sourceId = currentSourceFromSelect();
+          const sourceId = currentSourceFromTabs();
           const path = sourcePath(sourceId);
           const params = new URLSearchParams();
 
@@ -111,7 +112,7 @@ pub fn navigation_script() -> String {
           if (q && q.value.trim()) params.set("q", q.value.trim());
 
           if (sourceId) {
-            const refValue = currentRefFromSelect();
+            const refValue = currentRefFromRadios();
             const source = sourceMetadata(sourceId);
             if (refValue && source && refValue !== source.defaultRef) {
               params.set("ref", refValue);
@@ -140,51 +141,57 @@ pub fn navigation_script() -> String {
           const pathSource = parts.length > 0 ? decodeURIComponent(parts[0]) : "";
           const effectiveSource = params.get("source") === "__SOURCE_ALL_VALUE__" ? "" : pathSource;
 
-          const sourceSelect = getSourceSelect();
-          if (sourceSelect) sourceSelect.value = effectiveSource;
+          setActiveSourceTab(effectiveSource);
+          populateRefRadios(effectiveSource);
 
-          populateRefSelect(effectiveSource);
-
-          const refSelect = getRefSelect();
-          if (refSelect && refSelect.type !== "hidden") {
-            const refParam = params.get("ref") || "";
-            if (refParam) {
-              refSelect.value = refParam;
-            }
+          const refParam = params.get("ref") || "";
+          if (refParam) {
+            const radio = document.querySelector(`[data-nixsearch-input="ref"][value="${CSS.escape(refParam)}"]`);
+            if (radio) radio.checked = true;
           }
 
           const q = document.querySelector('[data-nixsearch-input="q"]');
           if (q) q.value = params.get("q") || "";
         }
 
-        document.addEventListener("change", (evt) => {
-          const el = evt.target;
-          if (!el.matches) return;
+        // ─── Tab click handler ───
 
-          if (el.matches('[data-nixsearch-input="source-path"]')) {
-            populateRefSelect(el.value);
-            navigate(buildSearchUrlFromInputs());
-            return;
-          }
+        document.addEventListener("click", (evt) => {
+          const tab = evt.target.closest('.source-tab, .source-tabs-dropdown button');
+          if (!tab) return;
+          if (!tab.hasAttribute("data-nixsearch-source")) return;
 
-          if (el.matches('[data-nixsearch-input="ref"]')) {
-            navigate(buildSearchUrlFromInputs());
-            return;
-          }
+          evt.preventDefault();
+          const sourceId = tab.dataset.nixsearchSource || "";
+          setActiveSourceTab(sourceId);
+          populateRefRadios(sourceId);
+
+          // Close dropdown if it was open
+          const dropdown = document.querySelector('[data-nixsearch-overflow-menu]');
+          if (dropdown) dropdown.hidden = true;
+
+          navigate(buildSearchUrlFromInputs());
         });
 
-        // Handle clicks on table rows
+        // ─── Ref radio change handler ───
+
+        document.addEventListener("change", (evt) => {
+          const el = evt.target;
+          if (!el.matches || !el.matches('[data-nixsearch-input="ref"]')) return;
+          navigate(buildSearchUrlFromInputs());
+        });
+
+        // ─── Row clicks ───
+
         document.addEventListener("click", (evt) => {
           if (evt.defaultPrevented) return;
           if (evt.button !== 0) return;
           if (evt.metaKey || evt.ctrlKey || evt.shiftKey || evt.altKey) return;
 
-          // Check if click is on a table row with data-href
           const row = evt.target.closest("tr[data-href]");
           if (row) {
             const link = evt.target.closest("a[href]");
             if (!link) {
-              // Click was on the row but not the link itself
               evt.preventDefault();
               const url = new URL(row.dataset.href, window.location.href);
               if (url.origin === window.location.origin) {
@@ -194,6 +201,8 @@ pub fn navigation_script() -> String {
             }
           }
         });
+
+        // ─── Internal link clicks ───
 
         document.addEventListener("click", (evt) => {
           if (evt.defaultPrevented) return;
@@ -213,6 +222,8 @@ pub fn navigation_script() -> String {
           navigate(url.toString());
         });
 
+        // ─── Modal backdrop click ───
+
         document.addEventListener("click", (evt) => {
           const dialog = evt.target;
           if (!(dialog instanceof HTMLDialogElement)) return;
@@ -225,6 +236,8 @@ pub fn navigation_script() -> String {
           navigate(url);
         });
 
+        // ─── Search input debounce ───
+
         let debounce;
         document.addEventListener("input", (evt) => {
           const el = evt.target;
@@ -235,6 +248,8 @@ pub fn navigation_script() -> String {
           }, 200);
         });
 
+        // ─── Form submit ───
+
         document.addEventListener("submit", (evt) => {
           const form = evt.target;
           if (!(form instanceof HTMLFormElement)) return;
@@ -244,6 +259,8 @@ pub fn navigation_script() -> String {
           navigate(buildSearchUrlFromInputs());
         });
 
+        // ─── Popstate ───
+
         window.addEventListener("popstate", () => {
           const previous = currentUrl;
           syncInputsFromUrl();
@@ -251,6 +268,84 @@ pub fn navigation_script() -> String {
         });
 
         window.nixsearchNavigate = navigate;
+
+        // ─── Source tabs overflow detection ───
+
+        function computeTabOverflow() {
+          const tabsNav = document.querySelector('.source-tabs');
+          const overflowBtn = document.querySelector('[data-nixsearch-overflow-toggle]');
+          const dropdownEl = document.querySelector('[data-nixsearch-overflow-menu]');
+          if (!tabsNav || !overflowBtn || !dropdownEl) return;
+
+          const tabs = Array.from(tabsNav.querySelectorAll('.source-tab'));
+          if (tabs.length === 0) return;
+
+          // Reset: show all tabs, hide overflow elements
+          tabs.forEach((tab) => { tab.style.display = ""; });
+          overflowBtn.hidden = true;
+          dropdownEl.hidden = true;
+          dropdownEl.innerHTML = "";
+
+          // Measure available width (account for overflow button)
+          const containerWidth = tabsNav.offsetWidth;
+          let totalWidth = 0;
+          let overflowIndex = -1;
+
+          // Reserve space for the overflow button
+          const btnWidth = 32;
+
+          for (let i = 0; i < tabs.length; i++) {
+            totalWidth += tabs[i].offsetWidth + 2; // 2px gap
+            if (totalWidth > containerWidth - btnWidth && i > 0) {
+              overflowIndex = i;
+              break;
+            }
+          }
+
+          if (overflowIndex === -1) return; // All tabs fit
+
+          // Hide overflowing tabs and populate dropdown
+          overflowBtn.hidden = false;
+          const overflowTabs = tabs.slice(overflowIndex);
+          overflowTabs.forEach((tab) => { tab.style.display = "none"; });
+
+          dropdownEl.innerHTML = overflowTabs
+            .map((tab) => {
+              const sourceId = tab.dataset.nixsearchSource || "";
+              const label = tab.textContent.trim();
+              const color = getComputedStyle(tab).getPropertyValue("--tab-color").trim();
+              const active = tab.hasAttribute("data-active") ? ' data-active=""' : "";
+              return `<button type="button" data-nixsearch-source="${sourceId}" style="--tab-color: ${color};"${active}>${label}</button>`;
+            })
+            .join("");
+        }
+
+        // ─── Overflow dropdown toggle ───
+
+        document.addEventListener("click", (evt) => {
+          const toggle = evt.target.closest('[data-nixsearch-overflow-toggle]');
+          if (toggle) {
+            evt.preventDefault();
+            evt.stopPropagation();
+            const dropdown = document.querySelector('[data-nixsearch-overflow-menu]');
+            if (dropdown) dropdown.hidden = !dropdown.hidden;
+            return;
+          }
+
+          // Close dropdown on outside click
+          if (!evt.target.closest('[data-nixsearch-overflow-menu]')) {
+            const dropdown = document.querySelector('[data-nixsearch-overflow-menu]');
+            if (dropdown) dropdown.hidden = true;
+          }
+        });
+
+        // Run overflow detection on load and resize
+        computeTabOverflow();
+        let resizeRaf;
+        window.addEventListener("resize", () => {
+          cancelAnimationFrame(resizeRaf);
+          resizeRaf = requestAnimationFrame(computeTabOverflow);
+        });
 
         // ─── Infinite scroll ───
         const MORE_URL = "__MORE_RESULTS_URL__";
@@ -325,7 +420,10 @@ pub fn navigation_script() -> String {
         // Start observing on load and after each reconcile
         observeSentinel();
         window.addEventListener(RECONCILE_EVENT, () => {
-          setTimeout(observeSentinel, 50);
+          setTimeout(() => {
+            observeSentinel();
+            computeTabOverflow();
+          }, 50);
         });
 
         (() => {

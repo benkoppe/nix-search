@@ -4,6 +4,10 @@ use nixsearch_config::AppConfig;
 
 use crate::request::SourceFilter;
 
+use super::source_tag::color_for_source;
+
+const ALL_TAB_COLOR: &str = "#71717a";
+
 pub fn render_form(
     config: &AppConfig,
     source_filter: &SourceFilter,
@@ -14,20 +18,21 @@ pub fn render_form(
 
     html! {
         form.search-form action=(form_action) method="get" {
-            div.search-input-wrap {
-                input type="search" name="q" value=(q)
-                    placeholder="Search packages and options…"
-                    autocomplete="off" autofocus
-                    data-nixsearch-input="q";
-            }
+            div.search-bar-row {
+                div.search-input-wrap {
+                    div.ref-radios data-nixsearch-ref-container="" {
+                        (render_ref_radios(config, source_filter, ""))
+                    }
 
-            @if has_multiple_sources {
-                div.header-filters {
-                    (render_source_select(config, source_filter))
-                    (render_ref_select(config, source_filter, ""))
+                    input type="search" name="q" value=(q)
+                        placeholder="Search packages and options…"
+                        autocomplete="off" autofocus
+                        data-nixsearch-input="q";
                 }
-            } @else {
-                (render_ref_select(config, source_filter, ""))
+
+                @if has_multiple_sources {
+                    (render_source_tabs(config, source_filter))
+                }
             }
 
             button.search-submit type="submit" { "Search" }
@@ -35,20 +40,40 @@ pub fn render_form(
     }
 }
 
-fn render_source_select(config: &AppConfig, selected: &SourceFilter) -> Markup {
+fn render_source_tabs(config: &AppConfig, selected: &SourceFilter) -> Markup {
     html! {
-        select data-nixsearch-input="source-path" {
-            option value="" selected[*selected == SourceFilter::All] { "All sources" }
-            @for (id, source) in &config.sources {
-                @let name = source.name.as_deref().unwrap_or(id);
-                @let is_selected = matches!(selected, SourceFilter::Named(s) if s == id);
-                option value=(id) selected[is_selected] { (name) }
+        div.source-tabs-container {
+            nav.source-tabs {
+                button.source-tab type="button"
+                    data-nixsearch-source=""
+                    data-active[*selected == SourceFilter::All]
+                    style=(format!("--tab-color: {ALL_TAB_COLOR};")) {
+                    "All"
+                }
+                @for (id, source) in &config.sources {
+                    @let name = source.name.as_deref().unwrap_or(id);
+                    @let is_selected = matches!(selected, SourceFilter::Named(s) if s == id);
+                    @let color = color_for_source(config, id);
+                    button.source-tab type="button"
+                        data-nixsearch-source=(id)
+                        data-active[is_selected]
+                        style=(format!("--tab-color: {color};")) {
+                        (name)
+                    }
+                }
             }
+            button.source-tabs-overflow type="button"
+                data-nixsearch-overflow-toggle=""
+                aria-label="More sources"
+                hidden {
+                "▾"
+            }
+            div.source-tabs-dropdown hidden data-nixsearch-overflow-menu="" {}
         }
     }
 }
 
-fn render_ref_select(
+fn render_ref_radios(
     config: &AppConfig,
     selected_source: &SourceFilter,
     current_ref: &str,
@@ -64,22 +89,19 @@ fn render_ref_select(
         },
     };
 
-    let hidden = refs.is_empty();
-
     html! {
-        @if !hidden {
-            select name="ref" data-nixsearch-input="ref" {
-                @for ref_id in &refs {
-                    @let is_selected = if current_ref.is_empty() {
-                        default_ref == Some(*ref_id)
-                    } else {
-                        *ref_id == current_ref
-                    };
-                    option value=(ref_id) selected[is_selected] { (ref_id) }
-                }
+        @for ref_id in &refs {
+            @let is_selected = if current_ref.is_empty() {
+                default_ref == Some(*ref_id)
+            } else {
+                *ref_id == current_ref
+            };
+            label.ref-radio-label {
+                input type="radio" name="ref" value=(ref_id)
+                    checked[is_selected]
+                    data-nixsearch-input="ref";
+                span { (ref_id) }
             }
-        } @else {
-            input type="hidden" name="ref" value="" data-nixsearch-input="ref";
         }
     }
 }

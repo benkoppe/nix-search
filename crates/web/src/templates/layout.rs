@@ -13,6 +13,7 @@ use super::footer;
 use super::modal;
 use super::results;
 use super::search;
+use super::source_tag;
 
 static CSS: &str = include_str!("../../style.css");
 
@@ -86,6 +87,7 @@ fn source_metadata_json(config: &AppConfig) -> String {
            .iter()
            .map(|(id, source)| {
                let name = source.name.as_deref().unwrap_or(id);
+               let color = source_tag::color_for_source(config, id);
                let refs: Vec<&str> = source.refs.iter().map(|r| r.id.as_str()).collect();
                let refs_json = refs
                    .iter()
@@ -95,9 +97,10 @@ fn source_metadata_json(config: &AppConfig) -> String {
                let default_ref = source.default_ref.as_deref().unwrap_or("");
 
                format!(
-                   r#"{{"id":"{id}","name":"{name}","refs":[{refs_json}],"defaultRef":"{default_ref}"}}"#,
+                   r#"{{"id":"{id}","name":"{name}","color":"{color}","refs":[{refs_json}],"defaultRef":"{default_ref}"}}"#,
                    id = id.replace('"', "\\\""),
                    name = name.replace('"', "\\\""),
+                   color = color.replace('"', "\\\""),
                    default_ref = default_ref.replace('"', "\\\""),
                )
            })

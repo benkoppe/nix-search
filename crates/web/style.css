@@ -11,6 +11,8 @@
   --danger: #fca5a5;
 
   --src-default: #94a3b8;
+
+  --header-height: 88px;
 }
 
 * {
@@ -39,14 +41,18 @@ body {
   z-index: 100;
   background: var(--header-bg);
   border-bottom: 1px solid var(--border);
-  padding: 0.75rem 1rem;
+  height: var(--header-height);
+  display: flex;
+  align-items: center;
+  padding: 0 1rem;
 }
 
 .header-inner {
   max-width: 1200px;
   margin: 0 auto;
+  width: 100%;
   display: flex;
-  align-items: center;
+  align-items: flex-end;
   gap: 0.75rem;
 }
 
@@ -57,11 +63,36 @@ body {
   white-space: nowrap;
   text-decoration: none;
   letter-spacing: -0.01em;
+  flex-shrink: 0;
+  align-self: flex-end;
+  padding-bottom: 0.5rem;
+}
+
+/* ─── Search form layout ─── */
+
+.search-form {
+  display: flex;
+  align-items: center;
+  flex: 1;
+  min-width: 0;
+  gap: 0.75rem;
+}
+
+.search-bar-row {
+  display: flex;
+  align-items: stretch;
+  flex: 1;
+  min-width: 0;
+  gap: 0.75rem;
 }
 
 .search-input-wrap {
-  flex: 1;
-  min-width: 0;
+  width: 50%;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 0.3rem;
 }
 
 .search-input-wrap input[type="search"] {
@@ -85,37 +116,183 @@ body {
   color: var(--text-dim);
 }
 
-.header-filters {
+/* ─── Ref radio buttons ─── */
+
+.ref-radios {
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  flex-shrink: 0;
+  min-height: 1.4rem;
+  flex-wrap: wrap;
+  padding-left: 0.75rem;
 }
 
-.header-filters select {
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--bg);
+.ref-radio-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  cursor: pointer;
+  font-size: 0.75rem;
+  color: var(--text-dim);
+  transition: color 0.15s;
+  white-space: nowrap;
+}
+
+.ref-radio-label:hover {
   color: var(--text);
-  padding: 0.45rem 0.6rem;
-  font: inherit;
-  font-size: 0.8rem;
+}
+
+.ref-radio-label input[type="radio"] {
   appearance: none;
   -webkit-appearance: none;
+  width: 12px;
+  height: 12px;
+  border: 1.5px solid var(--text-dim);
+  border-radius: 50%;
+  margin: 0;
   cursor: pointer;
-  outline: none;
+  position: relative;
+  flex-shrink: 0;
+  transition: border-color 0.15s;
 }
 
-.header-filters select:focus {
+.ref-radio-label input[type="radio"]:checked {
   border-color: var(--accent);
 }
 
-.header-filters label {
-  display: none;
+.ref-radio-label input[type="radio"]:checked::after {
+  content: "";
+  position: absolute;
+  inset: 2px;
+  border-radius: 50%;
+  background: var(--accent);
 }
+
+.ref-radio-label:has(input:checked) {
+  color: var(--text-bright);
+}
+
+/* ─── Source tabs (pendaflex) ─── */
+
+.source-tabs-container {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  position: relative;
+  align-self: flex-end;
+}
+
+.source-tabs {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  overflow: hidden;
+  flex: 1;
+  min-width: 0;
+}
+
+.source-tab {
+  all: unset;
+  cursor: pointer;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--tab-color, var(--text-dim));
+  padding: 0.3rem 0.65rem 0.4rem;
+  white-space: nowrap;
+  border-radius: 6px 6px 0 0;
+  border: 1px solid transparent;
+  border-bottom: none;
+  position: relative;
+  opacity: 0.7;
+  transition: opacity 0.15s, background 0.15s;
+}
+
+.source-tab:hover {
+  opacity: 1;
+  background: color-mix(in srgb, var(--tab-color, var(--text-dim)) 8%, transparent);
+}
+
+.source-tab[data-active] {
+  opacity: 1;
+  background: var(--header-bg);
+  border-color: var(--border);
+  border-bottom: 1px solid var(--header-bg);
+}
+
+.source-tab[data-active]::after {
+  content: "";
+  position: absolute;
+  bottom: 0;
+  left: 0.5rem;
+  right: 0.5rem;
+  height: 2px;
+  background: var(--tab-color, var(--text-dim));
+  border-radius: 2px 2px 0 0;
+}
+
+/* ─── Source tabs overflow dropdown ─── */
+
+.source-tabs-overflow {
+  all: unset;
+  cursor: pointer;
+  font-size: 0.85rem;
+  color: var(--text-dim);
+  padding: 0.3rem 0.5rem 0.4rem;
+  border-radius: 6px 6px 0 0;
+  border: 1px solid transparent;
+  border-bottom: none;
+  position: relative;
+  flex-shrink: 0;
+  transition: color 0.15s, background 0.15s;
+}
+
+.source-tabs-overflow:hover {
+  color: var(--text);
+  background: var(--surface);
+}
+
+.source-tabs-dropdown {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  z-index: 110;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.3rem 0;
+  min-width: 140px;
+  box-shadow: 0 4px 12px rgb(0 0 0 / 0.4);
+}
+
+.source-tabs-dropdown button {
+  all: unset;
+  display: block;
+  width: 100%;
+  padding: 0.4rem 0.75rem;
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: var(--tab-color, var(--text-dim));
+  cursor: pointer;
+  transition: background 0.1s;
+}
+
+.source-tabs-dropdown button:hover {
+  background: color-mix(in srgb, var(--tab-color, var(--text-dim)) 12%, transparent);
+}
+
+.source-tabs-dropdown button[data-active] {
+  font-weight: 700;
+}
+
+/* ─── Hidden elements ─── */
 
 .search-submit {
   display: none;
+}
+
+[hidden] {
+  display: none !important;
 }
 
 /* ─── Main content ─── */
@@ -124,7 +301,7 @@ body {
   max-width: 1200px;
   margin: 0 auto;
   padding: 0;
-  margin-top: 110px;
+  margin-top: var(--header-height);
   padding-bottom: 2.5rem;
 }
 
@@ -421,6 +598,12 @@ a:hover {
 /* ─── Responsive ─── */
 
 @media (max-width: 700px) {
+  .header {
+    height: auto;
+    min-height: var(--header-height);
+    padding: 0.5rem 0.75rem;
+  }
+
   .header-inner {
     flex-wrap: wrap;
   }
@@ -429,18 +612,28 @@ a:hover {
     order: -1;
   }
 
-  .search-input-wrap {
+  .search-form {
     flex-basis: 100%;
     order: 1;
   }
 
-  .header-filters {
-    order: 2;
-    flex-basis: 100%;
+  .search-bar-row {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.5rem;
   }
 
-  .header-filters select {
-    flex: 1;
+  .search-input-wrap {
+    width: 100%;
+  }
+
+  .source-tabs-container {
+    align-self: auto;
+  }
+
+  .source-tabs {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
   }
 
   .col-desc {
