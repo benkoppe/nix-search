@@ -31,6 +31,8 @@ const MIN_SCHEDULE_INTERVAL: Duration = Duration::from_secs(60);
 
 const NIXPKGS_COLOR: &str = "#4ade80";
 const NIXOS_COLOR: &str = "#60a5fa";
+const HOME_MANAGER_COLOR: &str = "#f59e0b";
+const NIX_DARWIN_COLOR: &str = "#a78bfa";
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
@@ -376,6 +378,10 @@ impl RawSourceConfig {
         match preset {
             SourcePreset::NixpkgsPackages => self.expand_nixpkgs_packages(source_id, ref_ids),
             SourcePreset::NixosOptions => self.expand_nixos_options(source_id, ref_ids),
+            SourcePreset::HomeManagerOptions => {
+                self.expand_home_manager_options(source_id, ref_ids)
+            }
+            SourcePreset::NixDarwinOptions => self.expand_nix_darwin_options(source_id, ref_ids),
         }
     }
 
@@ -438,12 +444,96 @@ impl RawSourceConfig {
             refs,
         })
     }
+
+    fn expand_home_manager_options(
+        self,
+        source_id: &str,
+        ref_ids: Vec<String>,
+    ) -> Result<SourceConfig> {
+        reject_conflicting_kind(
+            self.kind,
+            SourceKind::Options,
+            SourcePreset::HomeManagerOptions,
+        )?;
+
+        let refs = ref_ids
+            .into_iter()
+            .map(|ref_id| RefConfig {
+                id: ref_id.clone(),
+                source_links: Some(home_manager_source_links(&ref_id)),
+                producer: ProducerConfig::NixBuildOptionsJson {
+                    source_ref: format!("github:nix-community/home-manager/{ref_id}"),
+                    attribute: "docs.json".to_owned(),
+                    import_path: "default.nix".to_owned(),
+                    output_path: "share/doc/home-manager/options.json".to_owned(),
+                },
+            })
+            .collect::<Vec<_>>();
+
+        let default_ref = effective_default_ref(source_id, self.default_ref, &refs)?;
+
+        Ok(SourceConfig {
+            name: self.name.or_else(|| Some("Home Manager".to_owned())),
+            color: self.color.or_else(|| Some(HOME_MANAGER_COLOR.to_owned())),
+            kind: SourceKind::Options,
+            default_ref,
+            refs,
+        })
+    }
+
+    fn expand_nix_darwin_options(
+        self,
+        source_id: &str,
+        ref_ids: Vec<String>,
+    ) -> Result<SourceConfig> {
+        reject_conflicting_kind(
+            self.kind,
+            SourceKind::Options,
+            SourcePreset::NixDarwinOptions,
+        )?;
+
+        let refs = ref_ids
+            .into_iter()
+            .map(|ref_id| RefConfig {
+                id: ref_id.clone(),
+                source_links: Some(nix_darwin_source_links(&ref_id)),
+                producer: ProducerConfig::NixBuildOptionsJson {
+                    source_ref: format!("github:nix-darwin/nix-darwin/{ref_id}"),
+                    attribute: "docs.optionsJSON".to_owned(),
+                    import_path: "release.nix".to_owned(),
+                    output_path: "share/doc/darwin/options.json".to_owned(),
+                },
+            })
+            .collect::<Vec<_>>();
+
+        let default_ref = effective_default_ref(source_id, self.default_ref, &refs)?;
+
+        Ok(SourceConfig {
+            name: self.name.or_else(|| Some("nix-darwin".to_owned())),
+            color: self.color.or_else(|| Some(NIX_DARWIN_COLOR.to_owned())),
+            kind: SourceKind::Options,
+            default_ref,
+            refs,
+        })
+    }
 }
 
 fn nixpkgs_source_links(revision: &str) -> SourceLinkConfig {
+    github_source_links("NixOS", "nixpkgs", revision)
+}
+
+fn home_manager_source_links(revision: &str) -> SourceLinkConfig {
+    github_source_links("nix-community", "home-manager", revision)
+}
+
+fn nix_darwin_source_links(revision: &str) -> SourceLinkConfig {
+    github_source_links("nix-darwin", "nix-darwin", revision)
+}
+
+fn github_source_links(owner: &str, repo: &str, revision: &str) -> SourceLinkConfig {
     SourceLinkConfig::Github {
-        owner: "NixOS".to_owned(),
-        repo: "nixpkgs".to_owned(),
+        owner: owner.to_owned(),
+        repo: repo.to_owned(),
         revision: Some(revision.to_owned()),
         strip_prefixes: Vec::new(),
     }
@@ -557,6 +647,8 @@ pub enum SourceKind {
 pub enum SourcePreset {
     NixpkgsPackages,
     NixosOptions,
+    HomeManagerOptions,
+    NixDarwinOptions,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -813,7 +905,9 @@ mod tests {
 
     use nix_search_core::{ArtifactKind, SourceLinkConfig};
 
-    use crate::{DownloadCompression, NIXOS_COLOR, NIXPKGS_COLOR};
+    use crate::{
+        DownloadCompression, HOME_MANAGER_COLOR, NIX_DARWIN_COLOR, NIXOS_COLOR, NIXPKGS_COLOR,
+    };
 
     use super::{AppConfig, ProducerConfig, ProducerKind, SourceKind};
 
@@ -1282,6 +1376,177 @@ mod tests {
             ProducerConfig::ChannelOptionsJson { channel, url } => {
                 assert_eq!(channel, NIXOS_UNSTABLE_REF);
                 assert_eq!(url, &None);
+            }
+            other => panic!("unexpected producer: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn loads_home_manager_options_preset() {
+        let config = load_toml(
+            r#"
+            [sources.home-manager]
+            name = "Home Manager"
+            preset = "home-manager-options"
+            preset_refs = ["master"]
+            "#,
+        );
+
+        let source = &config.sources["home-manager"];
+
+        assert_eq!(source.name.as_deref(), Some("Home Manager"));
+        assert_eq!(source.kind, SourceKind::Options);
+        assert_eq!(source.color.as_deref(), Some(HOME_MANAGER_COLOR));
+        assert_eq!(source.refs.len(), 1);
+
+        let ref_config = &source.refs[0];
+
+        assert_eq!(ref_config.id, "master");
+        assert_eq!(
+            ref_config.producer.kind(),
+            ProducerKind::NixBuildOptionsJson
+        );
+
+        match &ref_config.producer {
+            ProducerConfig::NixBuildOptionsJson {
+                source_ref,
+                attribute,
+                import_path,
+                output_path,
+            } => {
+                assert_eq!(source_ref, "github:nix-community/home-manager/master");
+                assert_eq!(attribute, "docs.json");
+                assert_eq!(import_path, "default.nix");
+                assert_eq!(output_path, "share/doc/home-manager/options.json");
+            }
+            other => panic!("unexpected producer: {other:?}"),
+        }
+
+        match ref_config.source_links.as_ref().unwrap() {
+            SourceLinkConfig::Github {
+                owner,
+                repo,
+                revision,
+                strip_prefixes,
+            } => {
+                assert_eq!(owner, "nix-community");
+                assert_eq!(repo, "home-manager");
+                assert_eq!(revision.as_deref(), Some("master"));
+                assert!(strip_prefixes.is_empty());
+            }
+            other => panic!("unexpected source links: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn loads_home_manager_options_preset_with_multiple_refs() {
+        let config = load_toml(
+            r#"
+            [sources.home-manager]
+            name = "Home Manager"
+            preset = "home-manager-options"
+            default_ref = "master"
+            preset_refs = ["master", "release-26.05"]
+            "#,
+        );
+
+        let source = &config.sources["home-manager"];
+
+        assert_eq!(source.default_ref.as_deref(), Some("master"));
+        assert_eq!(source.refs.len(), 2);
+        assert_eq!(source.refs[0].id, "master");
+        assert_eq!(source.refs[1].id, "release-26.05");
+
+        match &source.refs[1].producer {
+            ProducerConfig::NixBuildOptionsJson { source_ref, .. } => {
+                assert_eq!(
+                    source_ref,
+                    "github:nix-community/home-manager/release-26.05"
+                );
+            }
+            other => panic!("unexpected producer: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn loads_nix_darwin_options_preset() {
+        let config = load_toml(
+            r#"
+            [sources.darwin]
+            name = "nix-darwin"
+            preset = "nix-darwin-options"
+            preset_refs = ["master"]
+            "#,
+        );
+
+        let source = &config.sources["darwin"];
+
+        assert_eq!(source.name.as_deref(), Some("nix-darwin"));
+        assert_eq!(source.kind, SourceKind::Options);
+        assert_eq!(source.color.as_deref(), Some(NIX_DARWIN_COLOR));
+        assert_eq!(source.refs.len(), 1);
+
+        let ref_config = &source.refs[0];
+
+        assert_eq!(ref_config.id, "master");
+        assert_eq!(
+            ref_config.producer.kind(),
+            ProducerKind::NixBuildOptionsJson
+        );
+
+        match &ref_config.producer {
+            ProducerConfig::NixBuildOptionsJson {
+                source_ref,
+                attribute,
+                import_path,
+                output_path,
+            } => {
+                assert_eq!(source_ref, "github:nix-darwin/nix-darwin/master");
+                assert_eq!(attribute, "docs.optionsJSON");
+                assert_eq!(import_path, "release.nix");
+                assert_eq!(output_path, "share/doc/darwin/options.json");
+            }
+            other => panic!("unexpected producer: {other:?}"),
+        }
+
+        match ref_config.source_links.as_ref().unwrap() {
+            SourceLinkConfig::Github {
+                owner,
+                repo,
+                revision,
+                strip_prefixes,
+            } => {
+                assert_eq!(owner, "nix-darwin");
+                assert_eq!(repo, "nix-darwin");
+                assert_eq!(revision.as_deref(), Some("master"));
+                assert!(strip_prefixes.is_empty());
+            }
+            other => panic!("unexpected source links: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn loads_nix_darwin_options_preset_with_multiple_refs() {
+        let config = load_toml(
+            r#"
+            [sources.darwin]
+            name = "nix-darwin"
+            preset = "nix-darwin-options"
+            default_ref = "master"
+            preset_refs = ["master", "nix-darwin-25.11"]
+            "#,
+        );
+
+        let source = &config.sources["darwin"];
+
+        assert_eq!(source.default_ref.as_deref(), Some("master"));
+        assert_eq!(source.refs.len(), 2);
+        assert_eq!(source.refs[0].id, "master");
+        assert_eq!(source.refs[1].id, "nix-darwin-25.11");
+
+        match &source.refs[1].producer {
+            ProducerConfig::NixBuildOptionsJson { source_ref, .. } => {
+                assert_eq!(source_ref, "github:nix-darwin/nix-darwin/nix-darwin-25.11");
             }
             other => panic!("unexpected producer: {other:?}"),
         }

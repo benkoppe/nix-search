@@ -7,7 +7,10 @@ use crate::AppState;
 use crate::maintenance;
 
 pub fn render_footer(state: &AppState) -> Markup {
-    let generated_at = *state.generated_at.read().expect("generated_at lock poisoned");
+    let generated_at = *state
+        .generated_at
+        .read()
+        .expect("generated_at lock poisoned");
     let now = OffsetDateTime::now_utc();
 
     let elapsed = duration_between(generated_at, now);
