@@ -245,7 +245,7 @@ pub fn navigation_script() -> String {
           clearTimeout(debounce);
           debounce = setTimeout(() => {
             navigate(buildSearchUrlFromInputs());
-          }, 200);
+          }, 75);
         });
 
         // ─── Form submit ───

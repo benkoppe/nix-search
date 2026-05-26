@@ -183,25 +183,24 @@ body {
   font-size: 0.8rem;
   font-weight: 500;
   color: var(--text-dim);
-  padding: 0.35rem 0.7rem;
+  padding: 0.35rem 0.7rem 0.4rem;
   white-space: nowrap;
   position: relative;
   transition: color 0.15s;
 }
 
-.source-tab:hover {
-  color: var(--text);
+.source-tab:not([data-active]):hover {
+  color: color-mix(in srgb, var(--tab-color, var(--text)) 60%, transparent);
 }
 
 .source-tab[data-active] {
   color: var(--tab-color, var(--text-bright));
-  font-weight: 600;
 }
 
 .source-tab[data-active]::after {
   content: "";
   position: absolute;
-  bottom: 0;
+  bottom: 0.15rem;
   left: 0.7rem;
   right: 0.7rem;
   height: 2px;
