@@ -4,7 +4,7 @@ use std::io::Write as _;
 use anyhow::{Context, Result};
 use camino::{Utf8Path, Utf8PathBuf};
 use tantivy::collector::{Count, TopDocs};
-use tantivy::query::QueryParser;
+use tantivy::query::{BoostQuery, QueryParser};
 use tantivy::schema::{Field, STORED, STRING, Schema, TEXT, TantivyDocument, Value as _};
 use tantivy::{Index, IndexReader, IndexWriter, doc};
 use time::OffsetDateTime;
@@ -231,12 +231,54 @@ impl SearchIndex {
         parser.set_field_boost(self.fields.platforms, 1.0);
         parser.set_field_boost(self.fields.description, 1.0);
 
-        let parsed_query = parser
+        let exact_query = parser
             .parse_query(&options.query)
             .with_context(|| format!("failed to parse query {:?}", options.query))?;
 
-        let mut clauses: Vec<(tantivy::query::Occur, Box<dyn tantivy::query::Query>)> =
-            vec![(tantivy::query::Occur::Must, parsed_query)];
+        let mut text_clauses: Vec<(tantivy::query::Occur, Box<dyn tantivy::query::Query>)> =
+            vec![(
+                tantivy::query::Occur::Should,
+                Box::new(BoostQuery::new(exact_query, 1.0)),
+            )];
+
+        let mut fuzzy_parser = QueryParser::for_index(
+            &self.index,
+            vec![
+                self.fields.name_text,
+                self.fields.name_leaf,
+                self.fields.name_groups,
+                self.fields.attribute_text,
+                self.fields.main_program,
+            ],
+        );
+
+        fuzzy_parser.set_field_boost(self.fields.name_text, 10.0);
+        fuzzy_parser.set_field_boost(self.fields.name_leaf, 6.0);
+        fuzzy_parser.set_field_boost(self.fields.name_groups, 5.0);
+        fuzzy_parser.set_field_boost(self.fields.attribute_text, 12.0);
+        fuzzy_parser.set_field_boost(self.fields.main_program, 8.0);
+
+        for field in [
+            self.fields.name_text,
+            self.fields.name_leaf,
+            self.fields.name_groups,
+            self.fields.attribute_text,
+            self.fields.main_program,
+        ] {
+            fuzzy_parser.set_field_fuzzy(field, true, 1, true);
+        }
+
+        if let Ok(fuzzy_query) = fuzzy_parser.parse_query(&options.query) {
+            text_clauses.push((
+                tantivy::query::Occur::Should,
+                Box::new(BoostQuery::new(fuzzy_query, 0.25)),
+            ));
+        }
+
+        let mut clauses: Vec<(tantivy::query::Occur, Box<dyn tantivy::query::Query>)> = vec![(
+            tantivy::query::Occur::Must,
+            Box::new(tantivy::query::BooleanQuery::new(text_clauses)),
+        )];
 
         if !options.scopes.is_empty() {
             let mut scope_clauses = Vec::with_capacity(options.scopes.len());

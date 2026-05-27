@@ -100,6 +100,38 @@ fn group_query_finds_nested_option() {
 }
 
 #[test]
+fn fuzzy_option_leaf_query_finds_plural_option_name() {
+    let context = ingest_context_for(SOURCE_FIXTURES, REF_SMALL);
+    let docs = vec![option_doc_for(
+        &context,
+        "environment.systemPackages",
+        "System packages installed in the environment.",
+    )];
+
+    let (_tempdir, index) = build_index(docs);
+
+    let hits = search(&index, "systemPackage");
+
+    assert_contains(&hits, "environment.systemPackages");
+}
+
+#[test]
+fn fuzzy_option_leaf_prefix_query_finds_option_name() {
+    let context = ingest_context_for(SOURCE_FIXTURES, REF_SMALL);
+    let docs = vec![option_doc_for(
+        &context,
+        "environment.systemPackages",
+        "System packages installed in the environment.",
+    )];
+
+    let (_tempdir, index) = build_index(docs);
+
+    let hits = search(&index, "systemPack");
+
+    assert_contains(&hits, "environment.systemPackages");
+}
+
+#[test]
 fn package_attribute_query_finds_package() {
     let (_tempdir, index) = build_index(canonical_documents());
 
@@ -139,6 +171,34 @@ fn exact_name_match_ranks_before_description_only_match() {
     let hits = search(&index, OPTION_GIT_ENABLE);
 
     assert_ranks_before(&hits, OPTION_GIT_ENABLE, "services.example.enable");
+}
+
+#[test]
+fn exact_name_match_ranks_before_fuzzy_name_match() {
+    let context = ingest_context_for(SOURCE_FIXTURES, REF_SMALL);
+
+    let docs = vec![
+        option_doc_for(
+            &context,
+            "environment.systemPackage",
+            "Exact singular system package option.",
+        ),
+        option_doc_for(
+            &context,
+            "environment.systemPackages",
+            "Plural system packages option.",
+        ),
+    ];
+
+    let (_tempdir, index) = build_index(docs);
+
+    let hits = search(&index, "systemPackage");
+
+    assert_ranks_before(
+        &hits,
+        "environment.systemPackage",
+        "environment.systemPackages",
+    );
 }
 
 #[test]
