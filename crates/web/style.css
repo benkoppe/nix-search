@@ -535,6 +535,7 @@ dialog {
   margin: auto;
   width: min(800px, calc(100vw - 2rem));
   max-height: calc(100vh - 4rem);
+  max-height: calc(100dvh - 4rem);
   overflow: auto;
   overscroll-behavior: contain;
   -webkit-overflow-scrolling: touch;
@@ -717,6 +718,7 @@ a:hover {
 
   .search-bar-row input[type="search"] {
     width: 100%;
+    font-size: 16px;
   }
 
   .col-desc {
@@ -739,5 +741,6 @@ a:hover {
   dialog {
     width: calc(100vw - 1rem);
     max-height: calc(100vh - 2rem);
+    max-height: calc(100dvh - 2rem);
   }
 }

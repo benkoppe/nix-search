@@ -31,7 +31,7 @@ pub fn render_form(
             div.search-bar-row {
                 input type="search" name="q" value=(q)
                     placeholder="Search packages and options…"
-                    autocomplete="off" autofocus
+                    autocomplete="off" autocorrect="off" autocapitalize="none" spellcheck="false" autofocus
                     data-nixsearch-input="q";
 
                 div.ref-radios.js-ref-radios
