@@ -53,6 +53,9 @@ jobs:
 
       - name: Build images
         run: |
+          nix build -L ".#packages.${{ matrix.nix-system }}.cargoArtifacts" \
+            --out-link "result-cargo-artifacts-${{ matrix.arch }}"
+
           nix build -L ".#packages.${{ matrix.nix-system }}.container" \
             --out-link "result-container-${{ matrix.arch }}"
 

@@ -115,6 +115,7 @@
       };
 
       packages = rec {
+        inherit cargoArtifacts;
         inherit cli;
         default = cli;
       };
