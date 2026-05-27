@@ -11,6 +11,15 @@ pub fn dialog_reconcile_script() -> &'static str {
         } else {
           document.querySelectorAll("dialog[open]").forEach((d) => d.close());
         }
+
+        if (window.nixsearchSyncModalState) {
+          window.nixsearchSyncModalState();
+        } else {
+          document.documentElement.classList.toggle(
+            "modal-open",
+            !!dialog && dialog.open
+          );
+        }
       })();
       "#
 }
@@ -156,6 +165,22 @@ pub fn navigation_script() -> String {
             );
           }
         }
+
+        function syncModalState() {
+          const dialog = document.getElementById("entry-modal");
+
+          document.documentElement.classList.toggle(
+            "modal-open",
+            !!dialog && dialog.open
+          );
+
+          if (dialog && !dialog.dataset.modalStateBound) {
+            dialog.dataset.modalStateBound = "true";
+            dialog.addEventListener("close", syncModalState);
+          }
+        }
+
+        window.nixsearchSyncModalState = syncModalState;
 
         // ─── URL building ───
 
@@ -417,6 +442,7 @@ pub fn navigation_script() -> String {
         (() => {
           const dialog = document.getElementById("entry-modal");
           if (dialog && !dialog.open) dialog.showModal();
+          syncModalState();
         })();
 
         syncHeaderHeight();
