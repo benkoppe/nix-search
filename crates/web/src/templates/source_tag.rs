@@ -16,6 +16,7 @@ pub fn render(config: &AppConfig, source_id: &str) -> Markup {
             style=(format!("--source-color: {color};")) {
             (source_id)
         }
+        span.source-sep { "/" }
     }
 }
 

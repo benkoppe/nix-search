@@ -447,8 +447,7 @@ html.modal-open body {
   color: var(--source-color, var(--src-default));
 }
 
-.source-tag::after {
-  content: "/";
+.source-sep {
   color: var(--text-dim);
   font-weight: 400;
 }
