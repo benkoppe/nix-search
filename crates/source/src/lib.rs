@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use bytes::Bytes;
-use tempfile::tempdir;
+use tempfile::{TempDir, tempdir};
 use tokio::process::Command;
 
 use nixsearch_core::{ArtifactKind, IngestContext, SearchDocument};
@@ -477,7 +477,7 @@ impl Producer for EvalModulesProducer {
         store: &ArtifactStore,
         request: &ProduceRequest,
     ) -> Result<ProducedArtifact> {
-        let tempdir = tempdir().context("failed to create temporary eval-modules directory")?;
+        let tempdir = create_tempdir("eval-modules")?;
         let expression_path = tempdir.path().join("eval-modules-options.nix");
 
         let source_ref = normalize_flake_ref(&self.source_ref)?;
@@ -537,6 +537,19 @@ impl Producer for EvalModulesProducer {
             metadata,
         })
     }
+}
+
+fn create_tempdir(label: &str) -> Result<TempDir> {
+    let temp_parent = std::env::temp_dir();
+
+    std::fs::create_dir_all(&temp_parent).with_context(|| {
+        format!(
+            "failed to create temporary {label} parent directory {}",
+            temp_parent.display()
+        )
+    })?;
+
+    tempdir().with_context(|| format!("failed to create temporary {label} directory"))
 }
 
 async fn run_nix_build_expression(expression_path: &Path) -> Result<PathBuf> {

@@ -11,6 +11,7 @@
         "NIXSEARCH_SERVER__LISTEN=0.0.0.0:3000"
         "NIXSEARCH_DATA__ARTIFACT_URL=file:///data/artifacts"
         "NIXSEARCH_DATA__INDEX_DIR=/data/indexes"
+        "TMPDIR=/data/tmp"
       ];
 
       imageConfig = extraEnv: {
