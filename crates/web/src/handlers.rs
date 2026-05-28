@@ -29,6 +29,7 @@ pub struct StateQuery {
 pub struct MoreQuery {
     url: String,
     offset: usize,
+    limit: Option<usize>,
 }
 
 pub async fn health() -> &'static str {
@@ -98,7 +99,7 @@ pub async fn state_events(
     let patch_results = should_patch_results(query.previous_url.as_deref(), &request);
 
     let results_html = if patch_results {
-        let search_result = run_search(&state, &request, 0);
+        let search_result = run_search(&state, &request, 0, DEFAULT_LIMIT);
 
         Some(match &search_result {
             Ok(result) => {
@@ -153,12 +154,17 @@ pub async fn more_results(
         }
     };
 
-    let search_result = run_search(&state, &request, query.offset);
+    let limit = query.limit.unwrap_or(DEFAULT_LIMIT).max(1);
+    let search_result = run_search(&state, &request, query.offset, limit);
 
     match search_result {
         Ok(result) => {
-            let rows_html =
-                templates::results::render_rows_only(&request, &result.hits, &state.config);
+            let rows_html = templates::results::render_rows_only(
+                &request,
+                &result.hits,
+                &state.config,
+                query.offset,
+            );
             let sentinel_html = templates::results::render_sentinel_update(
                 &result.hits,
                 query.offset,
@@ -167,7 +173,8 @@ pub async fn more_results(
 
             Json(serde_json::json!({
                 "rows": rows_html,
-                "sentinel": sentinel_html
+                "sentinel": sentinel_html,
+                "total": result.total
             }))
         }
         Err(error) => Json(serde_json::json!({
@@ -179,7 +186,7 @@ pub async fn more_results(
 fn render_full_page_response(state: &AppState, request: PageRequest) -> Html<String> {
     let page = request.query.page.unwrap_or(1).max(1);
     let offset = (page - 1) * DEFAULT_LIMIT;
-    let search_result = run_search(state, &request, offset);
+    let search_result = run_search(state, &request, offset, DEFAULT_LIMIT);
     let error_message = search_result.as_ref().err().map(|e| format!("{e:#}"));
 
     let view = match (&search_result, &error_message) {
@@ -192,7 +199,12 @@ fn render_full_page_response(state: &AppState, request: PageRequest) -> Html<Str
     Html(markup.into_string())
 }
 
-fn run_search(state: &AppState, request: &PageRequest, offset: usize) -> Result<SearchResult> {
+fn run_search(
+    state: &AppState,
+    request: &PageRequest,
+    offset: usize,
+    limit: usize,
+) -> Result<SearchResult> {
     let Some(q) = normalized_query(&request.query) else {
         return Ok(SearchResult {
             hits: Vec::new(),
@@ -232,7 +244,7 @@ fn run_search(state: &AppState, request: &PageRequest, offset: usize) -> Result<
     index
         .search(SearchOptions {
             query: q.to_owned(),
-            limit: DEFAULT_LIMIT,
+            limit,
             offset,
             scopes,
         })

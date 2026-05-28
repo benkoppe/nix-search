@@ -1,3 +1,4 @@
+use crate::DEFAULT_LIMIT;
 use crate::MORE_RESULTS_URL;
 use crate::request::LinkOrigin;
 
@@ -31,10 +32,100 @@ pub fn navigation_script() -> String {
         const metadata = JSON.parse(
           document.getElementById("source-metadata").textContent
         );
+        const PAGE_SIZE = __DEFAULT_LIMIT__;
         let currentUrl = currentPublicUrl();
+
+        if ("scrollRestoration" in history) {
+          history.scrollRestoration = "manual";
+        }
 
         function currentPublicUrl() {
           return window.location.pathname + window.location.search;
+        }
+
+        function replaceVisiblePageInUrl(page) {
+          const nextPage = Math.max(1, page || 1);
+          const url = new URL(window.location.href);
+          const previous = currentPublicUrl();
+
+          if (nextPage > 1) {
+            url.searchParams.set("page", String(nextPage));
+          } else {
+            url.searchParams.delete("page");
+          }
+
+          const target = url.pathname + url.search;
+          if (target === previous) return;
+
+          history.replaceState(null, "", target);
+          currentUrl = currentPublicUrl();
+        }
+
+        function currentPageFromUrl() {
+          const page = parseInt(new URLSearchParams(window.location.search).get("page") || "1", 10);
+          return Number.isFinite(page) ? Math.max(1, page) : 1;
+        }
+
+        function scrollToResultPage(page) {
+          if (page <= 1) return false;
+
+          const row = document.querySelector(
+            `#results-body tr[data-result-page="${CSS.escape(String(page))}"]`
+          );
+          if (!row) return false;
+
+          const header = document.querySelector(".header");
+          const top = window.scrollY + row.getBoundingClientRect().top - (header ? header.offsetHeight : 0);
+          window.scrollTo(0, Math.max(0, top));
+          return true;
+        }
+
+        let pageSyncScheduled = false;
+        let virtualResults = null;
+        let virtualLoadScheduled = false;
+        let virtualLoading = false;
+
+        function scheduleVisiblePageSync() {
+          if (pageSyncScheduled) return;
+          pageSyncScheduled = true;
+          requestAnimationFrame(() => {
+            pageSyncScheduled = false;
+            const page = visibleResultPage();
+            if (page) replaceVisiblePageInUrl(page);
+          });
+        }
+
+        function visibleResultPage() {
+          const results = document.getElementById("results");
+          if (!results || results.classList.contains("results-loading")) return null;
+
+          if (virtualResults) {
+            return pageForOffset(virtualOffsetAtViewport());
+          }
+
+          const rows = document.querySelectorAll("#results-body tr[data-result-page]");
+          if (!rows.length) return null;
+
+          const header = document.querySelector(".header");
+          const top = (header ? header.offsetHeight : 0) + 1;
+          let lastAbove = null;
+
+          for (const row of rows) {
+            const page = parseInt(row.dataset.resultPage || "", 10);
+            if (!Number.isFinite(page)) continue;
+
+            const rect = row.getBoundingClientRect();
+            if (rect.bottom <= top) {
+              lastAbove = page;
+              continue;
+            }
+
+            if (rect.top < window.innerHeight) {
+              return page;
+            }
+          }
+
+          return lastAbove;
         }
 
         function reconcile(previousUrl) {
@@ -72,6 +163,9 @@ pub fn navigation_script() -> String {
             const results = document.getElementById("results");
             if (results && !results.classList.contains("results-loading")) {
               setLoading(false);
+              initializeVirtualResults();
+              observeSentinel();
+              scheduleVisiblePageSync();
             }
           });
           observer.observe(main, { childList: true, subtree: true });
@@ -373,11 +467,17 @@ pub fn navigation_script() -> String {
         let loadingMore = false;
         let loadMoreObserver = null;
 
+        function pageForOffset(offset) {
+          return Math.floor(Math.max(0, offset) / PAGE_SIZE) + 1;
+        }
+
         function observeSentinel() {
           if (loadMoreObserver) {
             loadMoreObserver.disconnect();
             loadMoreObserver = null;
           }
+
+          if (virtualResults) return;
 
           const sentinel = document.querySelector("#load-more-sentinel .load-more-trigger");
           if (!sentinel) return;
@@ -395,17 +495,371 @@ pub fn navigation_script() -> String {
           loadMoreObserver.observe(sentinel);
         }
 
+        async function fetchMoreResults(offset, pageUrl = currentPublicUrl(), limit) {
+          let url = `${MORE_URL}?url=${encodeURIComponent(pageUrl)}&offset=${offset}`;
+          if (limit) url += `&limit=${encodeURIComponent(limit)}`;
+          const res = await fetch(url);
+          return await res.json();
+        }
+
+        function initializeVirtualResults() {
+          const results = document.getElementById("results");
+          const tbody = document.getElementById("results-body");
+          if (!results || !tbody || !results.dataset.total) {
+            virtualResults = null;
+            return false;
+          }
+
+          if (results.querySelector("[data-virtual-spacer]")) {
+            return !!virtualResults;
+          }
+
+          const table = tbody.closest("table");
+          if (!table || !table.parentNode) {
+            virtualResults = null;
+            return false;
+          }
+
+          const rows = Array.from(tbody.querySelectorAll("tr[data-result-page]"));
+          const total = parseInt(results.dataset.total || "0", 10);
+          const startOffset = parseInt(results.dataset.startOffset || "0", 10);
+          const loadedCount = parseInt(results.dataset.loadedCount || String(rows.length), 10);
+          const rowHeight = measureResultRowHeight(rows);
+
+          if (!Number.isFinite(total) || total <= 0 || !rowHeight || rows.length === 0) {
+            virtualResults = null;
+            return false;
+          }
+
+          virtualResults = {
+            results,
+            table,
+            tbody,
+            total,
+            rowHeight,
+            startOffset,
+            endOffset: Math.min(total, startOffset + loadedCount),
+            requestUrl: currentPublicUrl(),
+            topSpacer: createVirtualSpacer("top"),
+            bottomSpacer: createVirtualSpacer("bottom"),
+            topSpacerHeight: startOffset * rowHeight,
+            bottomSpacerHeight: (total - Math.min(total, startOffset + loadedCount)) * rowHeight,
+            loadingRow: null,
+            loadingSpacer: null,
+          };
+
+          results.classList.add("virtual-results-active");
+          table.parentNode.insertBefore(virtualResults.topSpacer, table);
+          table.insertAdjacentElement("afterend", virtualResults.bottomSpacer);
+          applyVirtualSpacers();
+          return true;
+        }
+
+        function measureResultRowHeight(rows) {
+          const resultRows = rows && rows.length
+            ? rows
+            : Array.from(document.querySelectorAll("#results-body tr[data-result-page]"));
+          if (!resultRows.length) return null;
+
+          const height = measureRowsHeight(resultRows) / resultRows.length;
+          return height > 0 ? height : null;
+        }
+
+        function createVirtualSpacer(position) {
+          const spacer = document.createElement("div");
+          spacer.className = `virtual-spacer virtual-${position}-spacer`;
+          spacer.dataset.virtualSpacer = position;
+          return spacer;
+        }
+
+        function setSpacerHeight(spacer, height) {
+          const px = Math.max(0, height);
+          spacer.style.height = `${px}px`;
+        }
+
+        function applyVirtualSpacers() {
+          if (!virtualResults) return;
+
+          setSpacerHeight(virtualResults.topSpacer, virtualResults.topSpacerHeight);
+          setSpacerHeight(virtualResults.bottomSpacer, virtualResults.bottomSpacerHeight);
+        }
+
+        function resetVirtualSpacerHeights() {
+          if (!virtualResults) return;
+
+          virtualResults.topSpacerHeight = virtualResults.startOffset * virtualResults.rowHeight;
+          virtualResults.bottomSpacerHeight =
+            (virtualResults.total - virtualResults.endOffset) * virtualResults.rowHeight;
+          applyVirtualSpacers();
+        }
+
+        function adjustVirtualSpacer(position, delta) {
+          if (!virtualResults) return;
+
+          if (position === "top") {
+            virtualResults.topSpacerHeight = Math.max(0, virtualResults.topSpacerHeight + delta);
+          } else {
+            virtualResults.bottomSpacerHeight = Math.max(0, virtualResults.bottomSpacerHeight + delta);
+          }
+          applyVirtualSpacers();
+        }
+
+        function documentHeight() {
+          return document.documentElement.scrollHeight;
+        }
+
+        function runVirtualTransaction(spacer, anchor, mutate) {
+          const beforeHeight = documentHeight();
+          const beforeAnchorTop = anchor && document.contains(anchor)
+            ? anchor.getBoundingClientRect().top
+            : null;
+
+          mutate();
+
+          const heightDelta = documentHeight() - beforeHeight;
+          if (heightDelta !== 0) {
+            adjustVirtualSpacer(spacer, -heightDelta);
+          }
+
+          if (anchor && beforeAnchorTop !== null && document.contains(anchor)) {
+            const anchorDelta = anchor.getBoundingClientRect().top - beforeAnchorTop;
+            if (anchorDelta !== 0) window.scrollBy(0, anchorDelta);
+          }
+        }
+
+        function clearVirtualLoadingState() {
+          virtualResults.loadingRow = null;
+          virtualResults.loadingSpacer = null;
+        }
+
+        function measureRowsHeight(rows) {
+          if (!rows.length) return 0;
+
+          const first = rows[0].getBoundingClientRect();
+          const last = rows[rows.length - 1].getBoundingClientRect();
+          return Math.max(0, last.bottom - first.top);
+        }
+
+        function createVirtualLoadingRow() {
+          const row = document.createElement("tr");
+          row.className = "virtual-loading-row";
+
+          const cell = document.createElement("td");
+          cell.colSpan = 2;
+          cell.textContent = "Loading more results...";
+          row.appendChild(cell);
+          return row;
+        }
+
+        function showVirtualLoadingRow(mode, offset) {
+          if (!virtualResults) return;
+
+          removeVirtualLoadingRow();
+
+          const anchor = firstVisibleResultRow();
+
+          const row = createVirtualLoadingRow();
+          const spacer = mode === "prepend" ? "top" : "bottom";
+
+          runVirtualTransaction(spacer, anchor, () => {
+            if (mode === "replace") {
+              virtualResults.tbody.querySelectorAll("tr[data-result-page]").forEach((row) => row.remove());
+              virtualResults.startOffset = offset;
+              virtualResults.endOffset = offset;
+              virtualResults.topSpacerHeight = offset * virtualResults.rowHeight;
+              virtualResults.bottomSpacerHeight =
+                (virtualResults.total - offset) * virtualResults.rowHeight;
+              applyVirtualSpacers();
+            }
+
+            if (spacer === "top") {
+              virtualResults.tbody.insertBefore(row, virtualResults.tbody.firstChild);
+            } else {
+              virtualResults.tbody.appendChild(row);
+            }
+
+            virtualResults.loadingRow = row;
+            virtualResults.loadingSpacer = spacer;
+          });
+        }
+
+        function removeVirtualLoadingRow() {
+          if (!virtualResults || !virtualResults.loadingRow) return;
+
+          const row = virtualResults.loadingRow;
+          const spacer = virtualResults.loadingSpacer;
+          const anchor = firstVisibleResultRow();
+
+          runVirtualTransaction(spacer, anchor, () => {
+            row.remove();
+            clearVirtualLoadingState();
+          });
+        }
+
+        function virtualOffsetAtViewport() {
+          if (!virtualResults) return 0;
+
+          const header = document.querySelector(".header");
+          const viewportTop = window.scrollY + (header ? header.offsetHeight : 0) + 1;
+          const tbodyTop = window.scrollY + virtualResults.tbody.getBoundingClientRect().top;
+          const trackTop = tbodyTop - virtualResults.topSpacerHeight;
+          const y = Math.max(0, viewportTop - trackTop);
+          const offset = Math.floor(y / virtualResults.rowHeight);
+          return Math.min(virtualResults.total - 1, Math.max(0, offset));
+        }
+
+        function scheduleVirtualLoad() {
+          if (!virtualResults || virtualLoadScheduled) return;
+          virtualLoadScheduled = true;
+          requestAnimationFrame(() => {
+            virtualLoadScheduled = false;
+            loadVirtualRowsNearViewport();
+          });
+        }
+
+        async function loadVirtualRowsNearViewport() {
+          if (!virtualResults || virtualLoading) return;
+
+          const targetOffset = virtualOffsetAtViewport();
+          const { startOffset, endOffset, total } = virtualResults;
+
+          if (targetOffset < startOffset) {
+            if (startOffset - targetOffset <= PAGE_SIZE) {
+              await loadVirtualPage(Math.max(0, startOffset - PAGE_SIZE), "prepend");
+              return;
+            }
+
+            await loadVirtualPage(Math.floor(targetOffset / PAGE_SIZE) * PAGE_SIZE, "replace");
+            return;
+          }
+
+          if (targetOffset >= endOffset) {
+            if (targetOffset - endOffset <= PAGE_SIZE) {
+              await loadVirtualPage(endOffset, "append");
+              return;
+            }
+
+            await loadVirtualPage(Math.floor(targetOffset / PAGE_SIZE) * PAGE_SIZE, "replace");
+            return;
+          }
+
+          const margin = PAGE_SIZE * 2;
+          if (targetOffset < startOffset + margin && startOffset > 0) {
+            await loadVirtualPage(Math.max(0, startOffset - PAGE_SIZE), "prepend");
+            return;
+          }
+
+          if (targetOffset >= endOffset - margin && endOffset < total) {
+            await loadVirtualPage(endOffset, "append");
+          }
+        }
+
+        async function loadVirtualPage(offset, mode) {
+          if (!virtualResults || virtualLoading) return;
+
+          virtualLoading = true;
+          const state = virtualResults;
+          const requestUrl = state.requestUrl;
+          const normalizedOffset = Math.max(0, Math.min(offset, Math.max(0, state.total - 1)));
+          const anchor = firstVisibleResultRow();
+          showVirtualLoadingRow(mode, normalizedOffset);
+
+          try {
+            const data = await fetchMoreResults(normalizedOffset, requestUrl);
+
+            if (!virtualResults || virtualResults.requestUrl !== requestUrl) return;
+
+            if (data.error) {
+              console.error("Load virtual results failed:", data.error);
+              return;
+            }
+
+            if (!data.rows) return;
+
+            if (typeof data.total === "number") {
+              state.total = data.total;
+            }
+
+            const spacer = state.loadingSpacer || (mode === "prepend" ? "top" : "bottom");
+            let insertedRows = [];
+
+            runVirtualTransaction(spacer, anchor, () => {
+              if (state.loadingRow) {
+                state.loadingRow.remove();
+                clearVirtualLoadingState();
+              }
+
+              if (mode === "append") {
+                state.tbody.insertAdjacentHTML("beforeend", data.rows);
+              } else if (mode === "prepend") {
+                state.tbody.insertAdjacentHTML("afterbegin", data.rows);
+              } else {
+                state.tbody.querySelectorAll("tr[data-result-page]").forEach((row) => row.remove());
+                state.tbody.insertAdjacentHTML("afterbegin", data.rows);
+              }
+
+              insertedRows = rowsForOffset(normalizedOffset);
+              if (insertedRows.length === 0) return;
+
+              state.startOffset = mode === "append"
+                ? state.startOffset
+                : normalizedOffset;
+              state.endOffset = mode === "prepend"
+                ? state.endOffset
+                : Math.min(state.total, normalizedOffset + insertedRows.length);
+            });
+
+            if (insertedRows.length === 0) return;
+
+            scheduleVisiblePageSync();
+          } catch (e) {
+            console.error("Failed to load virtual results:", e);
+          } finally {
+            removeVirtualLoadingRow();
+            virtualLoading = false;
+            scheduleVirtualLoad();
+          }
+        }
+
+        function rowsForOffset(offset) {
+          const page = pageForOffset(offset);
+          return Array.from(
+            document.querySelectorAll(`#results-body tr[data-result-page="${CSS.escape(String(page))}"]`)
+          );
+        }
+
+        function firstVisibleResultRow() {
+          const header = document.querySelector(".header");
+          const top = (header ? header.offsetHeight : 0) + 1;
+
+          for (const row of document.querySelectorAll("#results-body tr[data-result-page]")) {
+            const rect = row.getBoundingClientRect();
+            if (rect.bottom > top && rect.top < window.innerHeight) {
+              return row;
+            }
+          }
+
+          return null;
+        }
+
+        function remeasureVirtualResults() {
+          if (!virtualResults) return;
+
+          const height = measureResultRowHeight();
+          if (!height) return;
+
+          virtualResults.rowHeight = height;
+          resetVirtualSpacerHeights();
+        }
+
         async function loadMore(trigger) {
           const offset = trigger.dataset.offset;
           if (!offset) return;
 
           loadingMore = true;
-          const pageUrl = location.pathname + location.search;
-          const url = `${MORE_URL}?url=${encodeURIComponent(pageUrl)}&offset=${offset}`;
 
           try {
-            const res = await fetch(url);
-            const data = await res.json();
+            const data = await fetchMoreResults(offset);
 
             if (data.error) {
               console.error("Load more failed:", data.error);
@@ -430,6 +884,7 @@ pub fn navigation_script() -> String {
             }
 
             window.scrollTo(0, scrollY);
+            scheduleVisiblePageSync();
           } catch (e) {
             console.error("Failed to load more results:", e);
           } finally {
@@ -438,14 +893,6 @@ pub fn navigation_script() -> String {
           }
         }
 
-        // Start observing on load and after each reconcile
-        observeSentinel();
-        window.addEventListener(RECONCILE_EVENT, () => {
-          setTimeout(() => {
-            observeSentinel();
-          }, 50);
-        });
-
         (() => {
           const dialog = document.getElementById("entry-modal");
           if (dialog && !dialog.open) dialog.showModal();
@@ -453,8 +900,32 @@ pub fn navigation_script() -> String {
         })();
 
         syncHeaderHeight();
+
+        // Start observing on load and after each reconcile
+        const initialPage = currentPageFromUrl();
+        initializeVirtualResults();
+        scrollToResultPage(initialPage);
+        observeSentinel();
+        scheduleVisiblePageSync();
+        window.addEventListener("scroll", () => {
+          scheduleVisiblePageSync();
+          scheduleVirtualLoad();
+        }, { passive: true });
+        window.addEventListener("resize", () => {
+          remeasureVirtualResults();
+          scheduleVisiblePageSync();
+          scheduleVirtualLoad();
+        });
+        window.addEventListener(RECONCILE_EVENT, () => {
+          setTimeout(() => {
+            initializeVirtualResults();
+            observeSentinel();
+            scheduleVisiblePageSync();
+          }, 50);
+        });
       })();
       "##
     .replace("__MORE_RESULTS_URL__", MORE_RESULTS_URL)
+    .replace("__DEFAULT_LIMIT__", &DEFAULT_LIMIT.to_string())
     .replace("__SOURCE_ALL_VALUE__", LinkOrigin::All.as_str())
 }

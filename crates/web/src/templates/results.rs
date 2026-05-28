@@ -42,7 +42,11 @@ pub fn render(
     let offset = (page - 1) * DEFAULT_LIMIT;
 
     html! {
-        div #results aria-live="polite" {
+        div #results aria-live="polite"
+            data-total=(total)
+            data-page-size=(DEFAULT_LIMIT)
+            data-start-offset=(offset)
+            data-loaded-count=(hits.len()) {
             div.results-status {
                 strong { (total) }
                 " result" @if total != 1 { "s" }
@@ -56,8 +60,9 @@ pub fn render(
                     }
                 }
                 tbody #results-body {
-                    @for hit in hits {
-                        (render_hit_row(request, hit, config, show_source))
+                    @for (index, hit) in hits.iter().enumerate() {
+                        @let result_page = page_for_offset(offset + index);
+                        (render_hit_row(request, hit, config, show_source, result_page))
                     }
                 }
             }
@@ -89,12 +94,18 @@ pub fn render(
 }
 
 /// Renders just the table row HTML for a batch of hits (no wrapper element).
-pub fn render_rows_only(request: &PageRequest, hits: &[SearchHit], config: &AppConfig) -> String {
+pub fn render_rows_only(
+    request: &PageRequest,
+    hits: &[SearchHit],
+    config: &AppConfig,
+    offset: usize,
+) -> String {
     let show_source = request.source.is_none() || request.query.source == Some(LinkOrigin::All);
 
     let markup = html! {
-        @for hit in hits {
-            (render_hit_row(request, hit, config, show_source))
+        @for (index, hit) in hits.iter().enumerate() {
+            @let result_page = page_for_offset(offset + index);
+            (render_hit_row(request, hit, config, show_source, result_page))
         }
     };
 
@@ -154,6 +165,7 @@ fn render_hit_row(
     hit: &SearchHit,
     config: &AppConfig,
     show_source: bool,
+    result_page: usize,
 ) -> Markup {
     let common = hit.document.common();
     let summary = summary_for_document(&hit.document);
@@ -173,7 +185,7 @@ fn render_hit_row(
             ref_id: ref_id_for_link(config, &common.source, &common.ref_id),
             kind: None,
             source: from_scope,
-            page: request.query.page,
+            page: Some(result_page),
         },
     );
 
@@ -181,7 +193,7 @@ fn render_hit_row(
     let source_color = source_tag::color_for_source(config, &common.source);
 
     html! {
-        tr data-href=(entry_href) {
+        tr data-href=(entry_href) data-result-page=(result_page) {
             td.col-name title=(common.name) {
                 a.entry-name href=(entry_href)
                     style=(format!("--source-color: {source_color};")) {
@@ -196,6 +208,10 @@ fn render_hit_row(
             }
         }
     }
+}
+
+fn page_for_offset(offset: usize) -> usize {
+    (offset / DEFAULT_LIMIT) + 1
 }
 
 fn summary_for_document(document: &SearchDocument) -> Option<&str> {
