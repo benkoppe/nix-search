@@ -525,7 +525,7 @@ body:has(.home-hero) {
 
 .home-count strong {
   font-weight: 600;
-  color: var(--text);
+  color: inherit;
   font-variant-numeric: tabular-nums;
 }
 
