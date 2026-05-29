@@ -36,6 +36,7 @@ pub fn render_full_page(
 
     let modal_markup = modal::render(state, request);
     let source_metadata = source_metadata_json(&state.config);
+    let page_title = title_for(&state.config, request, &source_filter);
 
     let form_action = match &source_filter {
         SourceFilter::All => "/".to_owned(),
@@ -59,7 +60,7 @@ pub fn render_full_page(
             head {
                 meta charset="utf-8";
                 meta name="viewport" content="width=device-width, initial-scale=1";
-                title { "nixsearch" }
+                title { (page_title) }
                 link rel="icon" type="image/x-icon" href="/favicon.ico";
                 script type="module"
                     src="https://cdn.jsdelivr.net/gh/starfederation/datastar@main/bundles/datastar.js" {}
@@ -98,6 +99,29 @@ pub fn render_full_page(
             }
         }
     }
+}
+
+fn title_for(config: &AppConfig, request: &PageRequest, source_filter: &SourceFilter) -> String {
+    let mut parts = Vec::new();
+
+    if let Some(q) = normalized_query(&request.query) {
+        parts.push(q.to_owned());
+    }
+
+    if let SourceFilter::Named(source_id) = source_filter {
+        parts.push(source_display_name(config, source_id).to_owned());
+    }
+
+    parts.push("nixsearch".to_owned());
+    parts.join(" · ")
+}
+
+fn source_display_name<'a>(config: &'a AppConfig, source_id: &'a str) -> &'a str {
+    config
+        .sources
+        .get(source_id)
+        .and_then(|source| source.name.as_deref())
+        .unwrap_or(source_id)
 }
 
 fn source_metadata_json(config: &AppConfig) -> String {
@@ -139,4 +163,78 @@ fn source_metadata_json(config: &AppConfig) -> String {
         ref_sets,
         default_ref_set.replace('"', "\\\""),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use nixsearch_test_support::{SOURCE_FIXTURES, app_config, utf8_path_buf};
+    use tempfile::tempdir;
+
+    use crate::request::{PageQuery, PageRequest, SourceFilter};
+
+    use super::title_for;
+
+    fn config() -> nixsearch_config::app::AppConfig {
+        let tempdir = tempdir().unwrap();
+        app_config(utf8_path_buf(tempdir.path().join("indexes")))
+    }
+
+    #[test]
+    fn title_includes_query_and_named_source() {
+        let config = config();
+        let request = PageRequest {
+            source: Some(SOURCE_FIXTURES.to_owned()),
+            entry: None,
+            query: PageQuery {
+                q: Some("git".to_owned()),
+                ..PageQuery::default()
+            },
+        };
+
+        assert_eq!(
+            title_for(
+                &config,
+                &request,
+                &SourceFilter::Named(SOURCE_FIXTURES.to_owned())
+            ),
+            "git · Fixtures · nixsearch"
+        );
+    }
+
+    #[test]
+    fn title_omits_all_source_filter() {
+        let config = config();
+        let request = PageRequest {
+            source: None,
+            entry: None,
+            query: PageQuery {
+                q: Some("git".to_owned()),
+                ..PageQuery::default()
+            },
+        };
+
+        assert_eq!(
+            title_for(&config, &request, &SourceFilter::All),
+            "git · nixsearch"
+        );
+    }
+
+    #[test]
+    fn title_includes_named_source_without_query() {
+        let config = config();
+        let request = PageRequest {
+            source: Some(SOURCE_FIXTURES.to_owned()),
+            entry: None,
+            query: PageQuery::default(),
+        };
+
+        assert_eq!(
+            title_for(
+                &config,
+                &request,
+                &SourceFilter::Named(SOURCE_FIXTURES.to_owned())
+            ),
+            "Fixtures · nixsearch"
+        );
+    }
 }

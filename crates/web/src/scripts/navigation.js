@@ -15,6 +15,35 @@
     return window.location.pathname + window.location.search;
   }
 
+  function titleForUrl(url) {
+    const parsed = new URL(url, window.location.href);
+    const params = new URLSearchParams(parsed.search);
+    const parts = parsed.pathname.split("/").filter(Boolean);
+    const sourceId = params.get("source") === "__SOURCE_ALL_VALUE__"
+      ? ""
+      : parts[0]
+        ? decodeURIComponent(parts[0])
+        : "";
+    const q = (params.get("q") || "").trim();
+    const titleParts = [];
+
+    if (q) titleParts.push(q);
+
+    const source = sourceMetadata(sourceId);
+    if (source) {
+      titleParts.push(source.name || source.id);
+    } else if (sourceId) {
+      titleParts.push(sourceId);
+    }
+
+    titleParts.push("nixsearch");
+    return titleParts.join(" · ");
+  }
+
+  function syncTitle(url = currentPublicUrl()) {
+    document.title = titleForUrl(url);
+  }
+
   function replaceVisiblePageInUrl(page) {
     const nextPage = Math.max(1, page || 1);
     const url = new URL(window.location.href);
@@ -426,6 +455,7 @@
       if (syncInputs) {
         syncInputsFromUrl();
       }
+      syncTitle(target);
       return;
     }
 
@@ -443,6 +473,7 @@
     if (loadsResults) {
       window.scrollTo(0, 0);
     }
+    syncTitle(target);
     reconcile(current);
   }
 
@@ -674,6 +705,7 @@
     const previous = currentUrl;
     syncInputsFromUrl();
     setLoading(shouldLoadResults(previous, currentPublicUrl()));
+    syncTitle();
     reconcile(previous);
   });
 
