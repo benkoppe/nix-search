@@ -414,6 +414,10 @@
     if (dialog && !dialog.dataset.modalStateBound) {
       dialog.dataset.modalStateBound = "true";
       dialog.addEventListener("close", syncModalState);
+      dialog.addEventListener("cancel", (evt) => {
+        if (!closeEntryModal(dialog)) return;
+        evt.preventDefault();
+      });
     }
   }
 
@@ -607,6 +611,16 @@
     return true;
   }
 
+  function closeEntryModal(dialog) {
+    const url = dialog.getAttribute("data-close-url");
+    if (!url) return false;
+
+    resetQueryHistoryGrouping();
+    resetSourceKeyboardHistoryGrouping();
+    navigate(url);
+    return true;
+  }
+
   function syncInputsFromUrl() {
     const params = new URLSearchParams(window.location.search);
     const state = normalizedStateFromUrl();
@@ -748,13 +762,8 @@
     if (!(dialog instanceof HTMLDialogElement)) return;
     if (dialog.id !== "entry-modal") return;
 
-    const url = dialog.getAttribute("data-close-url");
-    if (!url) return;
-
+    if (!closeEntryModal(dialog)) return;
     evt.preventDefault();
-    resetQueryHistoryGrouping();
-    resetSourceKeyboardHistoryGrouping();
-    navigate(url);
   });
 
   const QUERY_NAVIGATION_DEBOUNCE_MS = 75;

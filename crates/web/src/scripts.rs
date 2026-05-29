@@ -57,6 +57,15 @@ mod tests {
     }
 
     #[test]
+    fn navigation_script_routes_modal_cancel_through_navigation() {
+        let script = navigation_script();
+
+        assert!(script.contains(r#"addEventListener("cancel""#));
+        assert!(script.contains("closeEntryModal(dialog)"));
+        assert!(script.contains("evt.preventDefault();"));
+    }
+
+    #[test]
     fn dialog_reconcile_script_loads_asset() {
         assert!(dialog_reconcile_script().contains("entry-modal"));
         assert!(dialog_reconcile_script().contains("showModal"));
