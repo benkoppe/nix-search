@@ -282,9 +282,17 @@
     const next = new URL(url, window.location.href);
     const target = next.pathname + next.search;
     const current = currentPublicUrl();
+
+    if (target === current) {
+      if (syncInputs) {
+        syncInputsFromUrl();
+      }
+      return;
+    }
+
     const loadsResults = shouldLoadResults(current, target);
 
-    if (push && current !== target) {
+    if (push) {
       history.pushState(null, "", target);
     }
 
@@ -393,11 +401,18 @@
   });
 
   let debounce;
+
+  function clearPendingQueryNavigation() {
+    clearTimeout(debounce);
+    debounce = null;
+  }
+
   document.addEventListener("input", (evt) => {
     const el = evt.target;
     if (!el.matches || !el.matches('[data-nixsearch-input="q"]')) return;
-    clearTimeout(debounce);
+    clearPendingQueryNavigation();
     debounce = setTimeout(() => {
+      debounce = null;
       navigate(buildSearchUrlFromInputs());
     }, 75);
   });
@@ -408,6 +423,7 @@
     if (form.method && form.method.toLowerCase() !== "get") return;
 
     evt.preventDefault();
+    clearPendingQueryNavigation();
 
     const q = form.querySelector('[data-nixsearch-input="q"]');
     if (q) q.blur();

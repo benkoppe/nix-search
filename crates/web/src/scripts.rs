@@ -36,6 +36,15 @@ mod tests {
     }
 
     #[test]
+    fn navigation_script_prevents_duplicate_query_reconciles() {
+        let script = navigation_script();
+
+        assert!(script.contains("if (target === current)"));
+        assert!(script.contains("function clearPendingQueryNavigation()"));
+        assert!(script.contains("clearPendingQueryNavigation();"));
+    }
+
+    #[test]
     fn dialog_reconcile_script_loads_asset() {
         assert!(dialog_reconcile_script().contains("entry-modal"));
         assert!(dialog_reconcile_script().contains("showModal"));
