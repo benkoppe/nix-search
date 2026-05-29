@@ -536,6 +536,10 @@ body:has(.home-hero) {
   letter-spacing: 0.01em;
 }
 
+.home-hint + .home-hint {
+  margin-top: 0.65rem;
+}
+
 .home-hint kbd {
   font-family:
     "SF Mono", "Cascadia Code", "Fira Code", "JetBrains Mono", monospace;

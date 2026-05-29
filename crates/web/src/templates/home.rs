@@ -48,6 +48,9 @@ pub fn render(state: &AppState, request: &PageRequest) -> Markup {
                 p.home-hint {
                     "Press " kbd { "/" } " to search"
                 }
+                p.home-hint {
+                    kbd { "Ctrl" } "+" kbd { "N" } " / " kbd { "P" } " to filter"
+                }
             }
         }
     }
