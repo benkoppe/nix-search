@@ -475,19 +475,17 @@
 
   document.addEventListener("keydown", (evt) => {
     if (
+      (evt.key === "[" || evt.key === "]") &&
       evt.ctrlKey &&
       !evt.metaKey &&
       !evt.altKey &&
-      !evt.shiftKey &&
       !evt.isComposing
     ) {
-      const key = evt.key.toLowerCase();
-      if (key === "n" || key === "p") {
-        const dialog = document.getElementById("entry-modal");
-        if (dialog && dialog.open) return;
-        if (cycleSourceFilter(key === "n" ? 1 : -1)) evt.preventDefault();
-        return;
-      }
+      const dialog = document.getElementById("entry-modal");
+      if (dialog && dialog.open) return;
+
+      if (cycleSourceFilter(evt.key === "]" ? 1 : -1)) evt.preventDefault();
+      return;
     }
 
     if (evt.key !== "/") return;
