@@ -9,11 +9,13 @@
     }:
     let
       craneLib = inputs.crane.mkLib pkgs;
+      webAssetSourceFiles = lib.fileset.fileFilter (
+        file:
+        file.hasExt "css" || file.hasExt "ico" || file.hasExt "js" || file.hasExt "svg"
+      ) ../crates/web;
       cargoSourceFiles = lib.fileset.unions [
         (craneLib.fileset.commonCargoSources ../.)
-        ../crates/web/favicon.ico
-        ../crates/web/style.css
-        ../crates/web/src/scripts
+        webAssetSourceFiles
       ];
 
       cargoDepsSourceFiles = craneLib.fileset.cargoTomlAndLock ../.;
