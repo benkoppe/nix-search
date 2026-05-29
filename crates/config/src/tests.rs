@@ -137,6 +137,7 @@ fn default_config_is_valid() {
     assert_eq!(config.data.artifact_url, "file://./data/artifacts");
     assert_eq!(config.data.index_dir, Utf8PathBuf::from("./data/indexes"));
     assert_eq!(config.server.listen, "127.0.0.1:3000");
+    assert_eq!(config.server.public_url, None);
     assert!(config.sources.is_empty());
 }
 
@@ -150,6 +151,7 @@ fn loads_config_file() {
 
         [server]
         listen = "0.0.0.0:8080"
+        public_url = "https://search.example.com"
 
         [sources.nixos]
         name = "NixOS Options"
@@ -174,6 +176,10 @@ fn loads_config_file() {
 
     assert_eq!(config.data.artifact_url, "file://./tmp/artifacts");
     assert_eq!(config.server.listen, "0.0.0.0:8080");
+    assert_eq!(
+        config.server.public_url.as_deref(),
+        Some("https://search.example.com")
+    );
     assert!(config.server.bootstrap);
     assert!(!config.server.schedule.enabled);
     assert_eq!(config.server.schedule.interval, "24h");
@@ -1438,6 +1444,41 @@ fn parses_schedule_config() {
         config.server.schedule.parse_interval().unwrap(),
         std::time::Duration::from_secs(12 * 60 * 60)
     );
+}
+
+#[test]
+fn validates_server_public_url() {
+    for value in ["https://search.example.com", "http://localhost:3000"] {
+        let config = load_toml(&format!(
+            r#"
+            [server]
+            public_url = "{value}"
+            "#
+        ));
+
+        assert_eq!(config.server.public_url.as_deref(), Some(value));
+    }
+}
+
+#[test]
+fn rejects_invalid_server_public_url() {
+    for value in [
+        "search.example.com",
+        "/relative",
+        "file:///tmp/nixsearch",
+        "https://search.example.com/base/",
+        "https://search.example.com/?q=git",
+        "https://search.example.com/#top",
+    ] {
+        let error = load_toml_error(&format!(
+            r#"
+            [server]
+            public_url = "{value}"
+            "#
+        ));
+
+        assert_error_contains(&error, "server.public_url");
+    }
 }
 
 #[test]

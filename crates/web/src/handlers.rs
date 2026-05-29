@@ -3,22 +3,27 @@ use std::convert::Infallible;
 use anyhow::{Context, Result};
 use axum::Json;
 use axum::extract::{Path, Query, State};
-use axum::http::header;
+use axum::http::{HeaderMap, Uri, header};
 use axum::response::{Html, IntoResponse, Sse, sse::Event};
 use datastar::prelude::{ExecuteScript, PatchElements};
 use futures_util::stream;
 use serde::Deserialize;
+use url::Url;
 
-use nixsearch_index::search::{SearchIndex, SearchOptions, SearchResult, SearchScope};
+use nixsearch_config::app::AppConfig;
+use nixsearch_index::search::{
+    EntryLookup, EntryLookupResult, SearchIndex, SearchOptions, SearchResult, SearchScope,
+};
 
 use crate::AppState;
 use crate::DEFAULT_LIMIT;
 use crate::request::{
-    PageQuery, PageRequest, decode_path_value, non_empty, normalized_query,
-    page_request_from_public_url, page_state, search_scopes_for_state,
+    PageQuery, PageRequest, PageState, decode_path_value, non_empty, normalized_query,
+    page_request_from_public_url, page_state, parse_document_kind, resolve_entry_ref,
+    search_scopes_for_state,
 };
 use crate::scripts::dialog_reconcile_script;
-use crate::templates;
+use crate::templates::{self, layout::PageUrls, modal::EntryData};
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct StateQuery {
@@ -43,12 +48,22 @@ pub async fn favicon() -> impl IntoResponse {
     )
 }
 
+pub async fn apple_touch_icon() -> impl IntoResponse {
+    (
+        [(header::CONTENT_TYPE, "image/png")],
+        include_bytes!("../apple-touch-icon.png"),
+    )
+}
+
 pub async fn root_page(
     State(state): State<AppState>,
+    headers: HeaderMap,
+    uri: Uri,
     Query(query): Query<PageQuery>,
 ) -> impl IntoResponse {
     render_full_page_response(
         &state,
+        page_urls(&state, &headers, &uri),
         PageRequest {
             source: None,
             entry: None,
@@ -60,10 +75,13 @@ pub async fn root_page(
 pub async fn source_page(
     State(state): State<AppState>,
     Path(source): Path<String>,
+    headers: HeaderMap,
+    uri: Uri,
     Query(query): Query<PageQuery>,
 ) -> impl IntoResponse {
     render_full_page_response(
         &state,
+        page_urls(&state, &headers, &uri),
         PageRequest {
             source: Some(source),
             entry: None,
@@ -75,12 +93,15 @@ pub async fn source_page(
 pub async fn entry_page(
     State(state): State<AppState>,
     Path((source, entry)): Path<(String, String)>,
+    headers: HeaderMap,
+    uri: Uri,
     Query(query): Query<PageQuery>,
 ) -> impl IntoResponse {
     let entry = decode_path_value(&entry).unwrap_or(entry);
 
     render_full_page_response(
         &state,
+        page_urls(&state, &headers, &uri),
         PageRequest {
             source: Some(source),
             entry: Some(entry),
@@ -103,14 +124,33 @@ pub async fn state_events(
         }
     };
 
+    let page_state = page_state(&state.config, &request);
     let patch_results = should_patch_results(&state, query.previous_url.as_deref(), &request);
+    let needs_search = patch_results && normalized_query(&request.query).is_some();
+    let needs_entry = page_state.detail.is_some();
+    let index = if needs_search || needs_entry {
+        Some(open_search_index(&state).map_err(|error| format!("{error:#}")))
+    } else {
+        None
+    };
 
     let results_html = if patch_results {
-        let page_state = page_state(&state.config, &request);
         if normalized_query(&request.query).is_none() {
             Some(templates::home::render(&state, &request, &page_state).into_string())
         } else {
-            let search_result = run_search(&state, &request, 0, DEFAULT_LIMIT);
+            let search_result = match &index {
+                Some(Ok(index)) => run_search_with_index(
+                    &state.config,
+                    index,
+                    &request,
+                    &page_state,
+                    0,
+                    DEFAULT_LIMIT,
+                )
+                .map_err(|error| format!("{error:#}")),
+                Some(Err(error)) => Err(error.clone()),
+                None => unreachable!("search result requested without opening the index"),
+            };
 
             Some(match &search_result {
                 Ok(result) => templates::results::render(
@@ -127,8 +167,8 @@ pub async fn state_events(
         None
     };
 
-    let page_state = page_state(&state.config, &request);
-    let modal_html = templates::modal::render(&state, &request, &page_state).into_string();
+    let entry = entry_data_from_index(&state.config, &page_state, index.as_ref());
+    let modal_html = templates::modal::render(&state.config, &page_state, &entry).into_string();
 
     let mut events: Vec<std::result::Result<Event, Infallible>> = Vec::new();
 
@@ -203,20 +243,205 @@ pub async fn more_results(
     }
 }
 
-fn render_full_page_response(state: &AppState, request: PageRequest) -> Html<String> {
+fn render_full_page_response(
+    state: &AppState,
+    page_urls: PageUrls,
+    request: PageRequest,
+) -> Html<String> {
+    let page_state = page_state(&state.config, &request);
     let page = request.query.page.unwrap_or(1).max(1);
     let offset = (page - 1) * DEFAULT_LIMIT;
-    let search_result = run_search(state, &request, offset, DEFAULT_LIMIT);
-    let error_message = search_result.as_ref().err().map(|e| format!("{e:#}"));
+    let needs_search = normalized_query(&request.query).is_some();
+    let needs_entry = page_state.detail.is_some();
+    let index = if needs_search || needs_entry {
+        Some(open_search_index(state).map_err(|error| format!("{error:#}")))
+    } else {
+        None
+    };
+    let search_result = if needs_search {
+        match &index {
+            Some(Ok(index)) => run_search_with_index(
+                &state.config,
+                index,
+                &request,
+                &page_state,
+                offset,
+                DEFAULT_LIMIT,
+            )
+            .map_err(|error| format!("{error:#}")),
+            Some(Err(error)) => Err(error.clone()),
+            None => unreachable!("search result requested without opening the index"),
+        }
+    } else {
+        Ok(empty_search_result())
+    };
+    let entry = entry_data_from_index(&state.config, &page_state, index.as_ref());
 
-    let view = match (&search_result, &error_message) {
-        (Ok(result), _) => Ok(result),
-        (Err(_), Some(error)) => Err(error.as_str()),
-        (Err(_), None) => unreachable!(),
+    let view = match &search_result {
+        Ok(result) => Ok(result),
+        Err(error) => Err(error.as_str()),
     };
 
-    let markup = templates::layout::render_full_page(state, &request, view);
+    let markup =
+        templates::layout::render_full_page(state, &request, &page_state, &page_urls, view, &entry);
     Html(markup.into_string())
+}
+
+fn entry_data_from_index(
+    config: &AppConfig,
+    page_state: &PageState,
+    index: Option<&Result<SearchIndex, String>>,
+) -> EntryData {
+    let Some(detail) = page_state.detail.as_ref() else {
+        return EntryData::Empty;
+    };
+    let Some(index) = index else {
+        return EntryData::Error("search index was not opened".to_owned());
+    };
+    let index = match index {
+        Ok(index) => index,
+        Err(error) => return EntryData::Error(error.clone()),
+    };
+
+    let lookup_ref = detail
+        .ref_id
+        .as_deref()
+        .or(page_state.source_ref.as_deref())
+        .or_else(|| {
+            page_state
+                .active_ref_set()
+                .and_then(|ref_set| config.first_ref_for_ref_set_source(ref_set, &detail.source))
+        });
+    let ref_id = match resolve_entry_ref(config, &detail.source, lookup_ref) {
+        Ok(ref_id) => ref_id,
+        Err(error) => return EntryData::Error(format!("{error:#}")),
+    };
+    let kind = match parse_document_kind(detail.kind.as_deref()) {
+        Ok(kind) => kind,
+        Err(error) => return EntryData::Error(error),
+    };
+
+    match index
+        .find_entry(EntryLookup {
+            source: detail.source.clone(),
+            ref_id,
+            name: detail.entry.clone(),
+            kind,
+        })
+        .map_err(|error| format!("{error:#}"))
+    {
+        Ok(EntryLookupResult::Found(document)) => EntryData::Found(document),
+        Ok(EntryLookupResult::NotFound) => EntryData::NotFound,
+        Ok(EntryLookupResult::Ambiguous(documents)) => EntryData::Ambiguous(documents),
+        Err(error) => EntryData::Error(error),
+    }
+}
+
+fn page_urls(state: &AppState, headers: &HeaderMap, uri: &Uri) -> PageUrls {
+    let path = uri.path();
+    let query = uri.query();
+
+    if let Some(public_url) = state.config.server.public_url.as_deref()
+        && let Ok(base) = Url::parse(public_url)
+    {
+        return page_urls_from_base(base, path, query);
+    }
+
+    page_urls_from_headers(headers, path, query)
+}
+
+fn page_urls_from_base(mut base: Url, path: &str, query: Option<&str>) -> PageUrls {
+    let base_path = base.path().trim_end_matches('/').to_owned();
+    let path = if path == "/" {
+        if base_path.is_empty() {
+            "/".to_owned()
+        } else {
+            format!("{base_path}/")
+        }
+    } else {
+        format!("{base_path}{path}")
+    };
+
+    base.set_path(&path);
+    base.set_query(query);
+    base.set_fragment(None);
+
+    let domain = base.host_str().unwrap_or("localhost").to_owned();
+    let current_url = base.to_string();
+
+    base.set_path(&format!("{base_path}/apple-touch-icon.png"));
+    base.set_query(None);
+
+    PageUrls {
+        current_url,
+        domain,
+        image_url: base.to_string(),
+    }
+}
+
+fn page_urls_from_headers(headers: &HeaderMap, path: &str, query: Option<&str>) -> PageUrls {
+    let forwarded = forwarded_proto_host(headers);
+    let proto = forwarded
+        .as_ref()
+        .and_then(|(proto, _)| proto.as_deref())
+        .or_else(|| first_header_value(headers, "x-forwarded-proto"))
+        .unwrap_or("http");
+    let host = forwarded
+        .as_ref()
+        .and_then(|(_, host)| host.as_deref())
+        .or_else(|| first_header_value(headers, header::HOST.as_str()))
+        .unwrap_or("localhost");
+    let origin = format!("{proto}://{host}");
+    let path_and_query = match query {
+        Some(query) => format!("{path}?{query}"),
+        None => path.to_owned(),
+    };
+
+    PageUrls {
+        current_url: format!("{origin}{path_and_query}"),
+        domain: host_without_port(host).to_owned(),
+        image_url: format!("{origin}/apple-touch-icon.png"),
+    }
+}
+
+fn forwarded_proto_host(headers: &HeaderMap) -> Option<(Option<String>, Option<String>)> {
+    let header = first_header_value(headers, "forwarded")?;
+    let first = header.split(',').next().unwrap_or(header);
+    let mut proto = None;
+    let mut host = None;
+
+    for part in first.split(';') {
+        let Some((key, value)) = part.trim().split_once('=') else {
+            continue;
+        };
+        let value = value.trim().trim_matches('"');
+        match key.trim().to_ascii_lowercase().as_str() {
+            "proto" => proto = Some(value.to_owned()),
+            "host" => host = Some(value.to_owned()),
+            _ => {}
+        }
+    }
+
+    (proto.is_some() || host.is_some()).then_some((proto, host))
+}
+
+fn first_header_value<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
+    headers
+        .get(name)?
+        .to_str()
+        .ok()?
+        .split(',')
+        .next()
+        .map(str::trim)
+        .and_then(non_empty)
+}
+
+fn host_without_port(host: &str) -> &str {
+    if let Some(rest) = host.strip_prefix('[') {
+        return rest.split_once(']').map_or(host, |(host, _)| host);
+    }
+
+    host.split_once(':').map_or(host, |(host, _)| host)
 }
 
 fn run_search(
@@ -225,25 +450,47 @@ fn run_search(
     offset: usize,
     limit: usize,
 ) -> Result<SearchResult> {
-    let Some(q) = normalized_query(&request.query) else {
-        return Ok(SearchResult {
-            hits: Vec::new(),
-            total: 0,
-        });
+    if normalized_query(&request.query).is_none() {
+        return Ok(empty_search_result());
     };
 
+    let index = open_search_index(state)?;
+    let page_state = page_state(&state.config, request);
+
+    run_search_with_index(&state.config, &index, request, &page_state, offset, limit)
+}
+
+fn open_search_index(state: &AppState) -> Result<SearchIndex> {
     let index_path = state
         .index_path
         .read()
         .expect("index path lock poisoned")
         .clone();
 
-    let index = SearchIndex::open(&index_path)
-        .with_context(|| format!("failed to open current search index {}", index_path))?;
+    SearchIndex::open(&index_path)
+        .with_context(|| format!("failed to open current search index {}", index_path))
+}
 
-    let page_state = page_state(&state.config, request);
+fn empty_search_result() -> SearchResult {
+    SearchResult {
+        hits: Vec::new(),
+        total: 0,
+    }
+}
 
-    let scopes = search_scopes_for_state(&state.config, &page_state)
+fn run_search_with_index(
+    config: &AppConfig,
+    index: &SearchIndex,
+    request: &PageRequest,
+    page_state: &PageState,
+    offset: usize,
+    limit: usize,
+) -> Result<SearchResult> {
+    let Some(q) = normalized_query(&request.query) else {
+        return Ok(empty_search_result());
+    };
+
+    let scopes = search_scopes_for_state(config, page_state)
         .context("failed to resolve search scope")?
         .into_iter()
         .map(|scope| SearchScope {
@@ -260,4 +507,63 @@ fn run_search(
             scopes,
         })
         .context("search failed")
+}
+
+#[cfg(test)]
+mod tests {
+    use axum::http::{HeaderMap, HeaderValue};
+    use url::Url;
+
+    use super::{page_urls_from_base, page_urls_from_headers};
+
+    #[test]
+    fn page_urls_use_public_url_origin() {
+        let urls = page_urls_from_base(
+            Url::parse("https://search.example.com/").unwrap(),
+            "/nixpkgs/git",
+            Some("q=git"),
+        );
+
+        assert_eq!(
+            urls.current_url,
+            "https://search.example.com/nixpkgs/git?q=git"
+        );
+        assert_eq!(urls.domain, "search.example.com");
+        assert_eq!(
+            urls.image_url,
+            "https://search.example.com/apple-touch-icon.png"
+        );
+    }
+
+    #[test]
+    fn page_urls_fall_back_to_forwarded_headers() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "forwarded",
+            HeaderValue::from_static("for=127.0.0.1;proto=https;host=nixsearch.example.com"),
+        );
+        let urls = page_urls_from_headers(&headers, "/", None);
+
+        assert_eq!(urls.current_url, "https://nixsearch.example.com/");
+        assert_eq!(urls.domain, "nixsearch.example.com");
+        assert_eq!(
+            urls.image_url,
+            "https://nixsearch.example.com/apple-touch-icon.png"
+        );
+    }
+
+    #[test]
+    fn page_urls_fall_back_to_host_and_proto_headers() {
+        let mut headers = HeaderMap::new();
+        headers.insert("host", HeaderValue::from_static("localhost:3000"));
+        headers.insert("x-forwarded-proto", HeaderValue::from_static("https"));
+        let urls = page_urls_from_headers(&headers, "/nixpkgs", Some("q=git"));
+
+        assert_eq!(urls.current_url, "https://localhost:3000/nixpkgs?q=git");
+        assert_eq!(urls.domain, "localhost");
+        assert_eq!(
+            urls.image_url,
+            "https://localhost:3000/apple-touch-icon.png"
+        );
+    }
 }

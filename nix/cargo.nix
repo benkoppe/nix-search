@@ -11,7 +11,7 @@
       craneLib = inputs.crane.mkLib pkgs;
       webAssetSourceFiles = lib.fileset.fileFilter (
         file:
-        file.hasExt "css" || file.hasExt "ico" || file.hasExt "js" || file.hasExt "svg"
+        file.hasExt "css" || file.hasExt "ico" || file.hasExt "js" || file.hasExt "svg" || file.hasExt "png"
       ) ../crates/web;
       cargoSourceFiles = lib.fileset.unions [
         (craneLib.fileset.commonCargoSources ../.)

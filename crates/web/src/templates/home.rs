@@ -18,7 +18,7 @@ pub fn render(state: &AppState, _request: &PageRequest, page_state: &PageState) 
     let config = &state.config;
     let source_filter = &page_state.source_filter;
 
-    let (title_prefix, title_accent) = title_for(config, &source_filter);
+    let (title_prefix, title_accent) = title_for(config, source_filter);
     // "All" keeps the muted glass blue and lets the title fall back to the
     // logo's default blues; named sources tint both with the source color.
     let hero_style = match &source_filter {

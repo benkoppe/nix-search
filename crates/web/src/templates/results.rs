@@ -133,7 +133,7 @@ fn render_hit_row(
 
     let desc = summary.unwrap_or("");
     let source_color = source_tag::color_for_source(config, &common.source);
-    let row_parity = if result_offset % 2 == 0 {
+    let row_parity = if result_offset.is_multiple_of(2) {
         "even"
     } else {
         "odd"

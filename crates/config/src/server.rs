@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
+use url::Url;
 
 use crate::error::{ConfigError, Result};
 use crate::validation::validate_non_empty;
@@ -11,6 +12,7 @@ const MIN_SCHEDULE_INTERVAL: Duration = Duration::from_secs(60);
 #[serde(default, deny_unknown_fields)]
 pub struct ServerConfig {
     pub listen: String,
+    pub public_url: Option<String>,
     pub bootstrap: bool,
     pub schedule: ScheduleConfig,
 }
@@ -19,6 +21,7 @@ impl Default for ServerConfig {
     fn default() -> Self {
         Self {
             listen: "127.0.0.1:3000".to_owned(),
+            public_url: None,
             bootstrap: true,
             schedule: ScheduleConfig::default(),
         }
@@ -28,8 +31,47 @@ impl Default for ServerConfig {
 impl ServerConfig {
     pub(crate) fn validate(&self) -> Result<()> {
         validate_non_empty("server.listen", &self.listen)?;
+        validate_public_url(self.public_url.as_deref())?;
         self.schedule.validate()
     }
+}
+
+fn validate_public_url(value: Option<&str>) -> Result<()> {
+    let Some(value) = value else {
+        return Ok(());
+    };
+
+    let url = Url::parse(value).map_err(|error| {
+        ConfigError::Validation(format!(
+            "server.public_url must be an absolute URL: {error}"
+        ))
+    })?;
+
+    if !matches!(url.scheme(), "http" | "https") {
+        return Err(ConfigError::Validation(
+            "server.public_url must use http or https".to_owned(),
+        ));
+    }
+
+    if url.host_str().is_none() {
+        return Err(ConfigError::Validation(
+            "server.public_url must include a host".to_owned(),
+        ));
+    }
+
+    if url.path() != "/" {
+        return Err(ConfigError::Validation(
+            "server.public_url must not include a path".to_owned(),
+        ));
+    }
+
+    if url.query().is_some() || url.fragment().is_some() {
+        return Err(ConfigError::Validation(
+            "server.public_url must not include a query or fragment".to_owned(),
+        ));
+    }
+
+    Ok(())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -2,69 +2,37 @@ use maud::{Markup, html};
 
 use nixsearch_config::app::AppConfig;
 use nixsearch_core::document::SearchDocument;
-use nixsearch_index::search::{EntryLookup, EntryLookupResult, SearchIndex};
 
-use crate::AppState;
-use crate::request::{PageRequest, PageState, parse_document_kind, resolve_entry_ref};
+use crate::request::PageState;
 use crate::urls::{close_url_for_state, entry_url_for_document, source_url_from_state};
 
 use super::{detail, source_tag};
 
-pub fn render(state: &AppState, _request: &PageRequest, page_state: &PageState) -> Markup {
-    let Some(detail) = &page_state.detail else {
-        return render_empty();
-    };
+#[derive(Debug, Clone, PartialEq)]
+pub enum EntryData {
+    Empty,
+    Found(Box<SearchDocument>),
+    NotFound,
+    Ambiguous(Vec<SearchDocument>),
+    Error(String),
+}
 
-    let lookup_ref = detail
-        .ref_id
-        .as_deref()
-        .or_else(|| page_state.source_ref.as_deref())
-        .or_else(|| {
-            page_state.active_ref_set().and_then(|ref_set| {
-                state
-                    .config
-                    .first_ref_for_ref_set_source(ref_set, &detail.source)
-            })
-        });
-    let ref_id = match resolve_entry_ref(&state.config, &detail.source, lookup_ref) {
-        Ok(ref_id) => ref_id,
-        Err(error) => return render_error(&state.config, page_state, &format!("{error:#}")),
-    };
-
-    let kind = match parse_document_kind(detail.kind.as_deref()) {
-        Ok(kind) => kind,
-        Err(error) => return render_error(&state.config, page_state, &error),
-    };
-
-    let index_path = state
-        .index_path
-        .read()
-        .expect("index path lock poisoned")
-        .clone();
-
-    let index = match SearchIndex::open(&index_path) {
-        Ok(index) => index,
-        Err(error) => return render_error(&state.config, page_state, &format!("{error:#}")),
-    };
-
-    let lookup = EntryLookup {
-        source: detail.source.clone(),
-        ref_id,
-        name: detail.entry.clone(),
-        kind,
-    };
-
-    match index.find_entry(lookup) {
-        Ok(EntryLookupResult::Found(document)) => {
-            render_entry(page_state, &document, &state.config)
+impl EntryData {
+    pub fn document(&self) -> Option<&SearchDocument> {
+        match self {
+            Self::Found(document) => Some(document),
+            Self::Empty | Self::NotFound | Self::Ambiguous(_) | Self::Error(_) => None,
         }
-        Ok(EntryLookupResult::NotFound) => {
-            render_error(&state.config, page_state, "Entry not found.")
-        }
-        Ok(EntryLookupResult::Ambiguous(documents)) => {
-            render_ambiguous(page_state, &documents, &state.config)
-        }
-        Err(error) => render_error(&state.config, page_state, &format!("{error:#}")),
+    }
+}
+
+pub fn render(config: &AppConfig, page_state: &PageState, entry: &EntryData) -> Markup {
+    match entry {
+        EntryData::Empty => render_empty(),
+        EntryData::Found(document) => render_entry(page_state, document, config),
+        EntryData::NotFound => render_error(config, page_state, "Entry not found."),
+        EntryData::Ambiguous(documents) => render_ambiguous(page_state, documents, config),
+        EntryData::Error(error) => render_error(config, page_state, error),
     }
 }
 

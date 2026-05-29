@@ -76,8 +76,11 @@ fn render_ref_links(config: &AppConfig, state: &PageState, source_color: Option<
             div.ref-radios.noscript-ref-radios {
                 @for ref_set in config.ref_sets.keys() {
                     @let is_selected = state.active_ref_set() == Some(ref_set.as_str());
-                    @let mut next = state.clone();
-                    @let _ = next.set_explicit_ref_set(ref_set.clone());
+                    @let next = {
+                        let mut next = state.clone();
+                        next.set_explicit_ref_set(ref_set.clone());
+                        next
+                    };
                     a.ref-radio-label.ref-radio-link href=(all_tab_url_from_state(config, &next))
                         data-active[is_selected] {
                         span.ref-radio-dot {}
@@ -102,9 +105,12 @@ fn render_ref_links(config: &AppConfig, state: &PageState, source_color: Option<
             @for ref_config in &source.refs {
                 @let ref_id = ref_config.id.as_str();
                 @let is_selected = state.source_ref.as_deref() == Some(ref_id);
-                @let mut next = state.clone();
-                @let _ = next.source_ref.replace(ref_id.to_owned());
-                @let _ = next.clear_ref_set_context();
+                @let next = {
+                    let mut next = state.clone();
+                    next.source_ref.replace(ref_id.to_owned());
+                    next.clear_ref_set_context();
+                    next
+                };
                 a.ref-radio-label.ref-radio-link href=(source_tab_url_from_state(config, &next, source_id))
                     data-active[is_selected] {
                     span.ref-radio-dot {}

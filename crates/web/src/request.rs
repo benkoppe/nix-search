@@ -225,23 +225,23 @@ fn normalize_source_ref_scope(
     ref_id: Option<&str>,
     ref_set: Option<&str>,
 ) -> (RefScope, Option<String>) {
-    if let Some(ref_set) = ref_set.filter(|ref_set| config.ref_sets.contains_key(*ref_set)) {
-        if let Some(refs) = config.refs_for_ref_set_source(ref_set, source) {
-            let source_ref = if refs.len() == 1 {
-                refs.first().cloned()
-            } else {
-                ref_id
-                    .filter(|ref_id| refs.iter().any(|candidate| candidate == ref_id))
-                    .map(ToOwned::to_owned)
-                    .or_else(|| refs.first().cloned())
-            };
-            return (
-                RefScope::RefSet {
-                    ref_set: ref_set.to_owned(),
-                },
-                source_ref,
-            );
-        }
+    if let Some(ref_set) = ref_set.filter(|ref_set| config.ref_sets.contains_key(*ref_set))
+        && let Some(refs) = config.refs_for_ref_set_source(ref_set, source)
+    {
+        let source_ref = if refs.len() == 1 {
+            refs.first().cloned()
+        } else {
+            ref_id
+                .filter(|ref_id| refs.iter().any(|candidate| candidate == ref_id))
+                .map(ToOwned::to_owned)
+                .or_else(|| refs.first().cloned())
+        };
+        return (
+            RefScope::RefSet {
+                ref_set: ref_set.to_owned(),
+            },
+            source_ref,
+        );
     }
 
     let ref_id = ref_id.map(ToOwned::to_owned);

@@ -67,6 +67,7 @@ pub async fn serve(config: AppConfig) -> Result<()> {
         .route(RECONCILE_EVENTS_URL, get(handlers::state_events))
         .route(MORE_RESULTS_URL, get(handlers::more_results))
         .route("/favicon.ico", get(handlers::favicon))
+        .route("/apple-touch-icon.png", get(handlers::apple_touch_icon))
         .route("/", get(handlers::root_page))
         .route("/{source}", get(handlers::source_page))
         .route("/{source}/{*entry}", get(handlers::entry_page))
