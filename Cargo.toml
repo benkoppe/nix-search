@@ -67,7 +67,6 @@ lumis = { version = "0.9", default-features = false, features = [
 ] }
 comrak = { version = "0.39", default-features = false }
 ammonia = "4"
-taplo = { version = "0.14", default-features = false }
 
 nixsearch-core = { path = "crates/core" }
 nixsearch-ingest = { path = "crates/ingest" }

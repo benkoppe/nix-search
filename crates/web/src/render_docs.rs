@@ -2,7 +2,7 @@ use std::borrow::Cow;
 use std::fmt::Write;
 
 use comrak::{Options, markdown_to_html};
-use html_escape::encode_safe;
+use html_escape::{decode_html_entities, encode_safe};
 use maud::{Markup, PreEscaped, html};
 use serde_json::Value;
 
@@ -67,7 +67,8 @@ impl CodeHighlighter for LumisHighlighter {
 pub fn render_doc_text(value: &DocText) -> Markup {
     match value {
         DocText::Markdown(value) => render_markdown(value),
-        DocText::DocBook(value) | DocText::Plain(value) => html! { p { (value) } },
+        DocText::DocBook(value) => html! { p { (docbook_to_plain_text(value)) } },
+        DocText::Plain(value) => html! { p { (value) } },
     }
 }
 
@@ -76,9 +77,8 @@ pub fn render_doc_value(value: &DocValue) -> Markup {
         DocValue::NixExpression(value) => render_code(CodeLanguage::Nix, &format_nix(value)),
         DocValue::Json(value) => render_code(CodeLanguage::Nix, &format_nix(&json_to_nix(value))),
         DocValue::Markdown(value) => render_markdown(value),
-        DocValue::DocBook(value) | DocValue::Plain(value) => {
-            render_code(CodeLanguage::PlainText, value)
-        }
+        DocValue::DocBook(value) => html! { p { (docbook_to_plain_text(value)) } },
+        DocValue::Plain(value) => render_code(CodeLanguage::PlainText, value),
     }
 }
 
@@ -197,37 +197,80 @@ fn format_code(language: CodeLanguage, code: &str) -> Cow<'_, str> {
 
 fn preprocess_nix_doc_roles(value: &str) -> String {
     let mut output = String::with_capacity(value.len());
+    let mut in_fence = false;
+
+    for line in value.split_inclusive('\n') {
+        let line_without_newline = line.strip_suffix('\n').unwrap_or(line);
+        let trimmed = line_without_newline.trim_start();
+
+        if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
+            in_fence = !in_fence;
+            output.push_str(line);
+            continue;
+        }
+
+        if in_fence {
+            output.push_str(line);
+            continue;
+        }
+
+        output.push_str(&preprocess_nix_doc_roles_line(line_without_newline));
+        if line.ends_with('\n') {
+            output.push('\n');
+        }
+    }
+
+    output
+}
+
+fn preprocess_nix_doc_roles_line(value: &str) -> String {
+    let mut output = String::with_capacity(value.len());
     let mut rest = value;
 
-    while let Some(start) = rest.find('{') {
-        output.push_str(&rest[..start]);
-        rest = &rest[start..];
-        let Some(role_end) = rest.find("}`") else {
-            output.push_str(rest);
-            return output;
-        };
-        let role = &rest[1..role_end];
-        let after_role = &rest[role_end + 2..];
-        let Some(value_end) = after_role.find('`') else {
-            output.push_str(rest);
-            return output;
-        };
-        let text = &after_role[..value_end];
-        if matches!(
-            role,
-            "option" | "file" | "var" | "command" | "env" | "manpage"
-        ) {
+    while !rest.is_empty() {
+        if rest.starts_with('`') {
+            let tick_count = rest.bytes().take_while(|&byte| byte == b'`').count();
+            let fence = &rest[..tick_count];
+            let after_ticks = &rest[tick_count..];
+            let Some(tick_end) = after_ticks.find(fence) else {
+                output.push_str(rest);
+                return output;
+            };
+            let code_end = tick_count + tick_end + tick_count;
+            output.push_str(&rest[..code_end]);
+            rest = &rest[code_end..];
+            continue;
+        }
+
+        if let Some((text, remaining)) = nix_doc_role_at_start(rest) {
             output.push('`');
             output.push_str(text);
             output.push('`');
-        } else {
-            output.push_str(&rest[..role_end + 2 + value_end + 1]);
+            rest = remaining;
+            continue;
         }
-        rest = &after_role[value_end + 1..];
+
+        let ch = rest.chars().next().expect("rest is not empty");
+        output.push(ch);
+        rest = &rest[ch.len_utf8()..];
     }
 
-    output.push_str(rest);
     output
+}
+
+fn nix_doc_role_at_start(value: &str) -> Option<(&str, &str)> {
+    let role_end = value.strip_prefix('{')?.find("}`")? + 1;
+    let role = &value[1..role_end];
+    if !matches!(
+        role,
+        "option" | "file" | "var" | "command" | "env" | "manpage"
+    ) {
+        return None;
+    }
+
+    let after_role = &value[role_end + 2..];
+    let value_end = after_role.find('`')?;
+    Some((&after_role[..value_end], &after_role[value_end + 1..]))
 }
 
 pub fn format_nix(value: &str) -> String {
@@ -319,15 +362,43 @@ fn nix_attr_key(value: &str) -> Cow<'_, str> {
     }
 }
 
-fn nix_string(value: &str, indent: usize) -> String {
-    let lines = value.lines().collect::<Vec<_>>();
-    if lines.len() > 1 {
-        let next_indent = " ".repeat(indent + 2);
-        let current_indent = " ".repeat(indent);
-        let lines = lines.join(&format!("\n{next_indent}"));
-        return format!("''\n{next_indent}{lines}\n{current_indent}''");
+fn nix_string(value: &str, _indent: usize) -> String {
+    serde_json::to_string(value)
+        .expect("serializing a string cannot fail")
+        .replace("${", r"\${")
+}
+
+fn docbook_to_plain_text(value: &str) -> String {
+    let mut output = String::with_capacity(value.len());
+    let mut rest = value;
+
+    while let Some(tag_start) = rest.find('<') {
+        output.push_str(&decode_html_entities(&rest[..tag_start]));
+        rest = &rest[tag_start..];
+
+        let Some(tag_end) = rest.find('>') else {
+            output.push_str(&decode_html_entities(rest));
+            return collapse_whitespace(&output);
+        };
+
+        let tag = rest[1..tag_end].trim().trim_start_matches('/');
+        if tag.starts_with("para")
+            || tag.starts_with("simpara")
+            || tag.starts_with("listitem")
+            || tag.starts_with("itemizedlist")
+            || tag.starts_with("orderedlist")
+        {
+            output.push(' ');
+        }
+        rest = &rest[tag_end + 1..];
     }
-    format!("{:?}", value)
+
+    output.push_str(&decode_html_entities(rest));
+    collapse_whitespace(&output)
+}
+
+fn collapse_whitespace(value: &str) -> String {
+    value.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 #[cfg(test)]
@@ -347,11 +418,66 @@ mod tests {
     }
 
     #[test]
+    fn json_strings_are_escaped_for_nix() {
+        assert_eq!(json_to_nix(&json!("${pkgs.hello}")), r#""\${pkgs.hello}""#);
+        assert_eq!(json_to_nix(&json!("quote: \"")), r#""quote: \"""#);
+        assert_eq!(json_to_nix(&json!("one\ntwo")), r#""one\ntwo""#);
+        assert_eq!(
+            json_to_nix(&json!({ "not valid": "x" })),
+            r#"{ "not valid" = "x"; }"#
+        );
+    }
+
+    #[test]
     fn nix_doc_roles_become_inline_code() {
         assert_eq!(
             preprocess_nix_doc_roles("Use {option}`services.nginx.enable` here."),
             "Use `services.nginx.enable` here."
         );
+    }
+
+    #[test]
+    fn nix_doc_roles_inside_code_are_unchanged() {
+        assert_eq!(
+            preprocess_nix_doc_roles("``{option}`services.nginx.enable` ``"),
+            "``{option}`services.nginx.enable` ``"
+        );
+        assert_eq!(
+            preprocess_nix_doc_roles("```\n{option}`services.nginx.enable`\n```"),
+            "```\n{option}`services.nginx.enable`\n```"
+        );
+    }
+
+    #[test]
+    fn malformed_nix_doc_roles_are_unchanged() {
+        assert_eq!(
+            preprocess_nix_doc_roles("Use {unknown}`value` and {option}`unterminated."),
+            "Use {unknown}`value` and {option}`unterminated."
+        );
+    }
+
+    #[test]
+    fn docbook_renders_as_readable_plain_text() {
+        let rendered = render_doc_text(&DocText::DocBook(
+            "<para>Hello <literal>world</literal> &amp; friends</para>".to_owned(),
+        ))
+        .into_string();
+
+        assert!(rendered.contains("Hello world &amp; friends"));
+        assert!(!rendered.contains("<para>"));
+        assert!(!rendered.contains("<literal>"));
+    }
+
+    #[test]
+    fn docbook_value_does_not_render_executable_html() {
+        let rendered = render_doc_value(&DocValue::DocBook(
+            "<para>Hello<script>alert('no')</script></para>".to_owned(),
+        ))
+        .into_string();
+
+        assert!(rendered.contains("Hello"));
+        assert!(rendered.contains("alert"));
+        assert!(!rendered.contains("<script>"));
     }
 
     #[test]

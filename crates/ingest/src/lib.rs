@@ -116,20 +116,16 @@ fn convert_option(name: String, raw: RawOption, context: &IngestContext) -> Opti
 fn doc_text_from_value(value: Value) -> DocText {
     match value {
         Value::String(value) => DocText::Markdown(value),
-        Value::Object(mut object) => {
-            let doc_type = object
-                .remove("_type")
-                .and_then(|value| value.as_str().map(ToOwned::to_owned));
-            let text = object
-                .remove("text")
-                .and_then(|value| value.as_str().map(ToOwned::to_owned))
-                .unwrap_or_default();
+        Value::Object(object) => {
+            let doc_type = object.get("_type").and_then(Value::as_str);
+            let text = object.get("text").and_then(Value::as_str);
 
-            match doc_type.as_deref() {
-                Some("mdDoc" | "literalMD") => DocText::Markdown(text),
-                Some("literalDocBook") => DocText::DocBook(text),
-                Some("literalExpression" | "literalExample") => DocText::Plain(text),
-                _ => DocText::Plain(serde_json::to_string(&Value::Object(object)).unwrap_or(text)),
+            match (doc_type, text) {
+                (Some("mdDoc" | "literalMD"), Some(text)) => DocText::Markdown(text.to_owned()),
+                (Some("literalDocBook"), Some(text)) => DocText::DocBook(text.to_owned()),
+                (Some("literalExpression" | "literalExample"), Some(text))
+                | (Some(_), Some(text)) => DocText::Plain(text.to_owned()),
+                _ => DocText::Plain(Value::Object(object).to_string()),
             }
         }
         other => DocText::Plain(other.to_string()),
@@ -465,6 +461,48 @@ mod tests {
         );
         assert!(
             matches!(option.example, Some(DocValue::NixExpression(ref text)) if text.contains("browser.startup.homepage"))
+        );
+    }
+
+    #[test]
+    fn parses_option_doc_text_objects_without_losing_text() {
+        let json = r#"
+           {
+             "programs.example.unknown": {
+               "description": { "_type": "unknownDoc", "text": "Preserved text." }
+             },
+             "programs.example.docbook": {
+               "description": { "_type": "literalDocBook", "text": "<para>Hello</para>" }
+             },
+             "programs.example.object": {
+               "description": { "unexpected": true }
+             }
+           }
+           "#;
+
+        let docs = parse_options_json(json.as_bytes(), &ingest_context()).unwrap();
+
+        let descriptions = docs
+            .iter()
+            .map(|doc| match doc {
+                SearchDocument::Option(option) => {
+                    (option.common.name.as_str(), &option.description)
+                }
+                SearchDocument::Package(_) => unreachable!("expected option documents"),
+            })
+            .collect::<std::collections::BTreeMap<_, _>>();
+
+        assert_eq!(
+            descriptions["programs.example.unknown"],
+            &Some(DocText::Plain("Preserved text.".to_owned()))
+        );
+        assert_eq!(
+            descriptions["programs.example.docbook"],
+            &Some(DocText::DocBook("<para>Hello</para>".to_owned()))
+        );
+        assert_eq!(
+            descriptions["programs.example.object"],
+            &Some(DocText::Plain(r#"{"unexpected":true}"#.to_owned()))
         );
     }
 
