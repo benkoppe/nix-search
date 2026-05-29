@@ -449,6 +449,27 @@
     debounce = null;
   }
 
+  function isEditableTarget(target) {
+    if (!(target instanceof Element)) return false;
+    return !!target.closest("input, textarea, select, [contenteditable]");
+  }
+
+  document.addEventListener("keydown", (evt) => {
+    if (evt.key !== "/") return;
+    if (evt.metaKey || evt.ctrlKey || evt.altKey || evt.isComposing) return;
+    if (isEditableTarget(evt.target)) return;
+
+    const dialog = document.getElementById("entry-modal");
+    if (dialog && dialog.open) return;
+
+    const input = document.querySelector('[data-nixsearch-input="q"]');
+    if (!input) return;
+
+    evt.preventDefault();
+    input.focus();
+    input.select();
+  });
+
   document.addEventListener("input", (evt) => {
     const el = evt.target;
     if (!el.matches || !el.matches('[data-nixsearch-input="q"]')) return;

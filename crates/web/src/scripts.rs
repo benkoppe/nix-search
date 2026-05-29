@@ -45,6 +45,16 @@ mod tests {
     }
 
     #[test]
+    fn navigation_script_focuses_search_with_slash() {
+        let script = navigation_script();
+
+        assert!(script.contains(r#"if (evt.key !== "/") return;"#));
+        assert!(script.contains("if (dialog && dialog.open) return;"));
+        assert!(script.contains(r#"document.querySelector('[data-nixsearch-input="q"]')"#));
+        assert!(script.contains("input.select();"));
+    }
+
+    #[test]
     fn dialog_reconcile_script_loads_asset() {
         assert!(dialog_reconcile_script().contains("entry-modal"));
         assert!(dialog_reconcile_script().contains("showModal"));
