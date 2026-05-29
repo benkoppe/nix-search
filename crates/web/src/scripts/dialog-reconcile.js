@@ -15,4 +15,8 @@
       !!dialog && dialog.open
     );
   }
+
+  if (!dialog && window.nixsearchRestoreResultFocus) {
+    window.nixsearchRestoreResultFocus();
+  }
 })();

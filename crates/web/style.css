@@ -13,6 +13,10 @@
   --src-default: #94a3b8;
 
   --header-height: 88px;
+  --footer-visible-height: 2.25rem;
+
+  scroll-padding-top: calc(var(--header-height) + 0.5rem);
+  scroll-padding-bottom: calc(var(--footer-visible-height) + 0.5rem);
 }
 
 * {
@@ -592,6 +596,8 @@ body:has(.home-hero) {
 
 .results-table tr {
   cursor: pointer;
+  scroll-margin-top: calc(var(--header-height) + 0.5rem);
+  scroll-margin-bottom: calc(var(--footer-visible-height) + 0.5rem);
 }
 
 .virtual-results-active,

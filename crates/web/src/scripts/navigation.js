@@ -5,6 +5,7 @@
   );
   const PAGE_SIZE = __DEFAULT_LIMIT__;
   let currentUrl = currentPublicUrl();
+  let lastFocusedResultHref = "";
 
   if ("scrollRestoration" in history) {
     history.scrollRestoration = "manual";
@@ -340,6 +341,69 @@
     return true;
   }
 
+  function resultRows() {
+    return Array.from(document.querySelectorAll("#results-body tr[data-href]"));
+  }
+
+  function rememberResultLink(link) {
+    if (!link) return;
+    lastFocusedResultHref = link.href || link.getAttribute("href") || "";
+  }
+
+  function restoreResultFocus() {
+    if (!lastFocusedResultHref) return false;
+
+    const dialog = document.getElementById("entry-modal");
+    if (dialog && dialog.open) return false;
+
+    const link = Array.from(document.querySelectorAll("#results-body a.entry-name"))
+      .find((candidate) => candidate.href === lastFocusedResultHref);
+    if (!link) return false;
+
+    link.focus({ preventScroll: true });
+    return true;
+  }
+
+  window.nixsearchRestoreResultFocus = restoreResultFocus;
+
+  function firstVisibleResultRowIndex(rows) {
+    const visible = firstVisibleResultRow();
+    const index = visible ? rows.indexOf(visible) : -1;
+    return index >= 0 ? index : 0;
+  }
+
+  function focusedResultRowIndex(rows) {
+    const active = document.activeElement;
+    if (!(active instanceof Element)) return -1;
+
+    const row = active.closest("#results-body tr[data-href]");
+    return row ? rows.indexOf(row) : -1;
+  }
+
+  function moveResultSelection(direction) {
+    const rows = resultRows();
+    if (rows.length === 0) return false;
+
+    const focusedIndex = focusedResultRowIndex(rows);
+    const currentIndex =
+      focusedIndex >= 0 ? focusedIndex : firstVisibleResultRowIndex(rows);
+    const nextIndex = Math.max(
+      0,
+      Math.min(
+        rows.length - 1,
+        focusedIndex >= 0 ? currentIndex + direction : currentIndex,
+      ),
+    );
+
+    const link = rows[nextIndex].querySelector("a.entry-name");
+    if (!link) return false;
+
+    rememberResultLink(link);
+    link.focus();
+    link.scrollIntoView({ block: "nearest" });
+    return true;
+  }
+
   function navigate(url, { push = true, syncInputs = false } = {}) {
     const next = new URL(url, window.location.href);
     const target = next.pathname + next.search;
@@ -422,6 +486,7 @@
       const link = evt.target.closest("a[href]");
       if (!link) {
         evt.preventDefault();
+        rememberResultLink(row.querySelector("a.entry-name"));
         const url = new URL(row.dataset.href, window.location.href);
         if (url.origin === window.location.origin) {
           navigate(url.toString());
@@ -446,7 +511,16 @@
     if (link.rel && link.rel.includes("external")) return;
 
     evt.preventDefault();
+    if (link.matches("#results-body a.entry-name")) rememberResultLink(link);
     navigate(url.toString(), { syncInputs: true });
+  });
+
+  document.addEventListener("focusin", (evt) => {
+    const target = evt.target;
+    if (!(target instanceof Element)) return;
+
+    const link = target.closest("#results-body a.entry-name");
+    if (link) rememberResultLink(link);
   });
 
   document.addEventListener("click", (evt) => {
@@ -474,6 +548,23 @@
   }
 
   document.addEventListener("keydown", (evt) => {
+    if (
+      evt.ctrlKey &&
+      !evt.metaKey &&
+      !evt.altKey &&
+      !evt.shiftKey &&
+      !evt.isComposing
+    ) {
+      const key = evt.key.toLowerCase();
+      if (key === "n" || key === "p") {
+        const dialog = document.getElementById("entry-modal");
+        if (dialog && dialog.open) return;
+
+        if (moveResultSelection(key === "n" ? 1 : -1)) evt.preventDefault();
+        return;
+      }
+    }
+
     if (
       (evt.key === "[" || evt.key === "]") &&
       evt.ctrlKey &&
