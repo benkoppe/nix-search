@@ -684,21 +684,6 @@ a.entry-desc:hover {
   transition: opacity 0.15s ease;
 }
 
-input[type="search"].is-loading {
-  border-color: var(--accent);
-  animation: search-pulse 1.2s ease-in-out infinite;
-}
-
-@keyframes search-pulse {
-  0%,
-  100% {
-    border-color: var(--accent);
-  }
-  50% {
-    border-color: var(--text-dim);
-  }
-}
-
 .pagination {
   padding: 1.5rem 1rem;
   text-align: center;

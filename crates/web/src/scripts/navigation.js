@@ -115,19 +115,11 @@
 
   function setLoading(active) {
     const results = document.getElementById("results");
-    const input = document.querySelector('[data-nixsearch-input="q"]');
     if (results) {
       if (active) {
         results.classList.add("results-loading");
       } else {
         results.classList.remove("results-loading");
-      }
-    }
-    if (input) {
-      if (active) {
-        input.classList.add("is-loading");
-      } else {
-        input.classList.remove("is-loading");
       }
     }
   }
