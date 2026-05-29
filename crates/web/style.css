@@ -409,13 +409,38 @@ html.modal-open body {
 .footer-inner {
   max-width: 1200px;
   margin: 0 auto;
-  text-align: center;
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
   font-size: 0.75rem;
   color: var(--text-dim);
 }
 
+.footer-status {
+  grid-column: 2;
+  text-align: center;
+}
+
 .footer-separator {
   color: var(--text-dim);
+}
+
+.footer-link {
+  grid-column: 3;
+  justify-self: end;
+  display: inline-flex;
+  align-items: center;
+  color: inherit;
+}
+
+.footer-link:hover {
+  color: var(--text);
+}
+
+.footer-github-mark {
+  width: 1rem;
+  height: 1rem;
+  display: block;
 }
 
 /* ─── Results table ─── */
