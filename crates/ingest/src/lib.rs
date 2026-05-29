@@ -149,7 +149,6 @@ fn doc_value_from_value(value: Value) -> DocValue {
                 }
                 (Some("mdDoc" | "literalMD"), Some(text)) => DocValue::Markdown(text),
                 (Some("literalDocBook"), Some(text)) => DocValue::DocBook(text),
-                (Some(_), Some(text)) => DocValue::Plain(text),
                 _ => DocValue::Json(original),
             }
         }
@@ -461,6 +460,36 @@ mod tests {
         );
         assert!(
             matches!(option.example, Some(DocValue::NixExpression(ref text)) if text.contains("browser.startup.homepage"))
+        );
+    }
+
+    #[test]
+    fn preserves_unknown_typed_option_values_as_json() {
+        let json = r#"
+           {
+             "programs.example.value": {
+               "default": {
+                 "_type": "customValue",
+                 "text": "Preserved text.",
+                 "extra": true
+               }
+             }
+           }
+           "#;
+
+        let docs = parse_options_json(json.as_bytes(), &ingest_context()).unwrap();
+
+        let SearchDocument::Option(option) = &docs[0] else {
+            panic!("expected option document");
+        };
+
+        assert_eq!(
+            option.default,
+            Some(DocValue::Json(serde_json::json!({
+                "_type": "customValue",
+                "text": "Preserved text.",
+                "extra": true
+            })))
         );
     }
 

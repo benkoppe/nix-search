@@ -143,7 +143,7 @@ pub fn markdown_to_plain_text(value: &str) -> String {
                     }
                 }
             }
-            '*' | '_' | '`' | '#' | '>' | '~' => output.push(' '),
+            '*' | '_' | '`' | '#' | '~' => output.push(' '),
             '\\' => {
                 if let Some(ch) = chars.next() {
                     output.push(ch);
@@ -177,23 +177,122 @@ fn strip_html_to_text_preserve_lines(value: &str) -> String {
             return output;
         };
 
-        let tag = rest[1..tag_end].trim().trim_start_matches('/');
-        if tag.starts_with("para")
-            || tag.starts_with("simpara")
-            || tag.starts_with("listitem")
-            || tag.starts_with("itemizedlist")
-            || tag.starts_with("orderedlist")
-            || tag.starts_with('p')
-            || tag.starts_with("br")
-            || tag.starts_with("li")
-        {
-            output.push(' ');
+        let tag = &rest[1..tag_end];
+        if is_known_markup_tag(tag) {
+            if is_spacing_markup_tag(tag) {
+                output.push(' ');
+            }
+            rest = &rest[tag_end + 1..];
+        } else {
+            output.push('<');
+            rest = &rest[1..];
         }
-        rest = &rest[tag_end + 1..];
     }
 
     output.push_str(&decode_html_entities(rest));
     output
+}
+
+fn is_known_markup_tag(tag: &str) -> bool {
+    let tag = tag.trim();
+    if tag.starts_with('!') || tag.starts_with('?') {
+        return true;
+    }
+
+    let Some(name) = markup_tag_name(tag) else {
+        return false;
+    };
+
+    matches!(
+        name,
+        "a" | "abbr"
+            | "b"
+            | "blockquote"
+            | "br"
+            | "code"
+            | "command"
+            | "div"
+            | "em"
+            | "filename"
+            | "itemizedlist"
+            | "li"
+            | "link"
+            | "listitem"
+            | "literal"
+            | "ol"
+            | "option"
+            | "orderedlist"
+            | "p"
+            | "para"
+            | "pre"
+            | "programlisting"
+            | "replaceable"
+            | "simpara"
+            | "span"
+            | "strong"
+            | "table"
+            | "tbody"
+            | "td"
+            | "th"
+            | "thead"
+            | "tr"
+            | "ul"
+            | "varname"
+            | "xref"
+    )
+}
+
+fn is_spacing_markup_tag(tag: &str) -> bool {
+    let Some(name) = markup_tag_name(tag) else {
+        return false;
+    };
+
+    matches!(
+        name,
+        "blockquote"
+            | "br"
+            | "div"
+            | "itemizedlist"
+            | "li"
+            | "listitem"
+            | "ol"
+            | "orderedlist"
+            | "p"
+            | "para"
+            | "pre"
+            | "programlisting"
+            | "simpara"
+            | "table"
+            | "tbody"
+            | "td"
+            | "th"
+            | "thead"
+            | "tr"
+            | "ul"
+    )
+}
+
+fn markup_tag_name(tag: &str) -> Option<&str> {
+    let tag = tag
+        .trim()
+        .trim_start_matches('/')
+        .trim_start()
+        .trim_end_matches('/')
+        .trim_end();
+    let name_end = tag
+        .find(|ch: char| ch.is_ascii_whitespace() || ch == '/')
+        .unwrap_or(tag.len());
+    let name = &tag[..name_end];
+
+    if !name.is_empty()
+        && name
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit())
+    {
+        Some(name)
+    } else {
+        None
+    }
 }
 
 fn strip_nix_doc_roles(value: &str) -> String {
@@ -419,6 +518,18 @@ mod tests {
         assert_eq!(
             value.plain_text(),
             "Use Git and programs.git.enable safely."
+        );
+    }
+
+    #[test]
+    fn markdown_plain_text_preserves_angle_placeholders() {
+        let value = DocText::Markdown(
+            "Configure services.<name>.enable with paths like <path>.".to_owned(),
+        );
+
+        assert_eq!(
+            value.plain_text(),
+            "Configure services.<name>.enable with paths like <path>."
         );
     }
 
