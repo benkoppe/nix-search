@@ -366,7 +366,6 @@ fn page_urls_from_base(mut base: Url, path: &str, query: Option<&str>) -> PageUr
     base.set_query(query);
     base.set_fragment(None);
 
-    let domain = base.host_str().unwrap_or("localhost").to_owned();
     let current_url = base.to_string();
 
     base.set_path(&format!("{base_path}/apple-touch-icon.png"));
@@ -374,7 +373,6 @@ fn page_urls_from_base(mut base: Url, path: &str, query: Option<&str>) -> PageUr
 
     PageUrls {
         current_url,
-        domain,
         image_url: base.to_string(),
     }
 }
@@ -399,7 +397,6 @@ fn page_urls_from_headers(headers: &HeaderMap, path: &str, query: Option<&str>) 
 
     PageUrls {
         current_url: format!("{origin}{path_and_query}"),
-        domain: host_without_port(host).to_owned(),
         image_url: format!("{origin}/apple-touch-icon.png"),
     }
 }
@@ -434,14 +431,6 @@ fn first_header_value<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str>
         .next()
         .map(str::trim)
         .and_then(non_empty)
-}
-
-fn host_without_port(host: &str) -> &str {
-    if let Some(rest) = host.strip_prefix('[') {
-        return rest.split_once(']').map_or(host, |(host, _)| host);
-    }
-
-    host.split_once(':').map_or(host, |(host, _)| host)
 }
 
 fn run_search(
@@ -528,7 +517,6 @@ mod tests {
             urls.current_url,
             "https://search.example.com/nixpkgs/git?q=git"
         );
-        assert_eq!(urls.domain, "search.example.com");
         assert_eq!(
             urls.image_url,
             "https://search.example.com/apple-touch-icon.png"
@@ -545,7 +533,6 @@ mod tests {
         let urls = page_urls_from_headers(&headers, "/", None);
 
         assert_eq!(urls.current_url, "https://nixsearch.example.com/");
-        assert_eq!(urls.domain, "nixsearch.example.com");
         assert_eq!(
             urls.image_url,
             "https://nixsearch.example.com/apple-touch-icon.png"
@@ -560,7 +547,6 @@ mod tests {
         let urls = page_urls_from_headers(&headers, "/nixpkgs", Some("q=git"));
 
         assert_eq!(urls.current_url, "https://localhost:3000/nixpkgs?q=git");
-        assert_eq!(urls.domain, "localhost");
         assert_eq!(
             urls.image_url,
             "https://localhost:3000/apple-touch-icon.png"

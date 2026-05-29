@@ -23,7 +23,6 @@ const DEFAULT_DESCRIPTION: &str = "Search Nix packages and options";
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PageUrls {
     pub current_url: String,
-    pub domain: String,
     pub image_url: String,
 }
 
@@ -32,7 +31,6 @@ struct PageMetadata {
     title: String,
     description: String,
     url: String,
-    domain: String,
     image_url: String,
 }
 
@@ -92,15 +90,10 @@ pub fn render_full_page(
                 meta name="description" content=(&metadata.description);
                 meta property="og:url" content=(&metadata.url);
                 meta property="og:type" content="website";
+                meta property="og:site_name" content="nixsearch";
                 meta property="og:title" content=(&metadata.title);
                 meta property="og:description" content=(&metadata.description);
                 meta property="og:image" content=(&metadata.image_url);
-                meta name="twitter:card" content="summary_large_image";
-                meta property="twitter:domain" content=(&metadata.domain);
-                meta property="twitter:url" content=(&metadata.url);
-                meta name="twitter:title" content=(&metadata.title);
-                meta name="twitter:description" content=(&metadata.description);
-                meta name="twitter:image" content=(&metadata.image_url);
                 link rel="icon" type="image/x-icon" href="/favicon.ico";
                 link rel="apple-touch-icon" href="/apple-touch-icon.png";
                 script type="module"
@@ -152,7 +145,6 @@ fn page_metadata(
         title: title_for_entry(config, request, source_filter, entry.document()),
         description: description_for(config, request, search_result, entry),
         url: page_urls.current_url.clone(),
-        domain: page_urls.domain.clone(),
         image_url: page_urls.image_url.clone(),
     }
 }
@@ -215,8 +207,8 @@ fn description_for_document(
             .description
             .as_deref()
             .and_then(first_non_empty_line)
-            .map(|description| format!("{} - {description}", common.name))
-            .unwrap_or_else(|| format!("{} - {source}", common.name)),
+            .map(|description| format!("{} · {description}", common.name))
+            .unwrap_or_else(|| format!("{} · {source}", common.name)),
         nixsearch_core::document::SearchDocument::Package(package) => {
             let name = package
                 .version
@@ -230,7 +222,7 @@ fn description_for_document(
                 .and_then(first_non_empty_line)
                 .unwrap_or(source);
 
-            format!("{name} - {description}")
+            format!("{name} · {description}")
         }
     }
 }
@@ -303,7 +295,6 @@ mod tests {
     fn page_urls() -> PageUrls {
         PageUrls {
             current_url: "https://search.example.com/?q=git".to_owned(),
-            domain: "search.example.com".to_owned(),
             image_url: "https://search.example.com/apple-touch-icon.png".to_owned(),
         }
     }
@@ -420,7 +411,6 @@ mod tests {
         assert_eq!(metadata.title, "nixsearch");
         assert_eq!(metadata.description, "Search Nix packages and options");
         assert_eq!(metadata.url, "https://search.example.com/?q=git");
-        assert_eq!(metadata.domain, "search.example.com");
         assert_eq!(
             metadata.image_url,
             "https://search.example.com/apple-touch-icon.png"
@@ -463,7 +453,7 @@ mod tests {
                 Err("unused"),
                 &EntryData::Found(Box::new(document))
             ),
-            "git 2.54.0 - Distributed version control system"
+            "git 2.54.0 · Distributed version control system"
         );
     }
 
@@ -481,7 +471,7 @@ mod tests {
                 Err("unused"),
                 &EntryData::Found(Box::new(document))
             ),
-            "programs.git.enable - Enable Git support."
+            "programs.git.enable · Enable Git support."
         );
     }
 }
