@@ -361,6 +361,7 @@
   }
 
   function selectSource(sourceId) {
+    resetQueryHistoryGrouping();
     setActiveSourceTab(sourceId);
     populateRefRadios(sourceId);
 
@@ -456,13 +457,15 @@
         syncInputsFromUrl();
       }
       syncTitle(target);
-      return;
+      return false;
     }
 
     const loadsResults = shouldLoadResults(current, target);
 
     if (push) {
       history.pushState(null, "", target);
+    } else {
+      history.replaceState(null, "", target);
     }
 
     if (syncInputs) {
@@ -475,6 +478,7 @@
     }
     syncTitle(target);
     reconcile(current);
+    return true;
   }
 
   function syncInputsFromUrl() {
@@ -556,6 +560,7 @@
   document.addEventListener("change", (evt) => {
     const el = evt.target;
     if (!el.matches || !el.matches('[data-nixsearch-input="ref"]')) return;
+    resetQueryHistoryGrouping();
     navigate(buildSearchUrlFromInputs());
   });
 
@@ -572,6 +577,7 @@
         rememberResultLink(row.querySelector("a.entry-name"));
         const url = new URL(row.dataset.href, window.location.href);
         if (url.origin === window.location.origin) {
+          resetQueryHistoryGrouping();
           navigate(url.toString());
           return;
         }
@@ -595,6 +601,7 @@
 
     evt.preventDefault();
     if (link.matches("#results-body a.entry-name")) rememberResultLink(link);
+    resetQueryHistoryGrouping();
     navigate(url.toString(), { syncInputs: true });
   });
 
@@ -615,14 +622,41 @@
     if (!url) return;
 
     evt.preventDefault();
+    resetQueryHistoryGrouping();
     navigate(url);
   });
 
-  let debounce;
+  const QUERY_NAVIGATION_DEBOUNCE_MS = 75;
+  const QUERY_HISTORY_DEBOUNCE_MS = 1000;
+  let queryNavigationDebounce;
+  let queryHistoryDebounce;
+  let nextQueryNavigationPushes = true;
 
   function clearPendingQueryNavigation() {
-    clearTimeout(debounce);
-    debounce = null;
+    clearTimeout(queryNavigationDebounce);
+    queryNavigationDebounce = null;
+  }
+
+  function resetQueryHistoryGrouping() {
+    clearPendingQueryNavigation();
+    clearTimeout(queryHistoryDebounce);
+    queryHistoryDebounce = null;
+    nextQueryNavigationPushes = true;
+  }
+
+  function scheduleQueryHistoryBoundary() {
+    clearTimeout(queryHistoryDebounce);
+    queryHistoryDebounce = setTimeout(() => {
+      queryHistoryDebounce = null;
+      nextQueryNavigationPushes = true;
+    }, QUERY_HISTORY_DEBOUNCE_MS);
+  }
+
+  function navigateQueryFromInput() {
+    const changed = navigate(buildSearchUrlFromInputs(), {
+      push: nextQueryNavigationPushes,
+    });
+    if (changed) nextQueryNavigationPushes = false;
   }
 
   function isEditableTarget(target) {
@@ -681,10 +715,11 @@
     const el = evt.target;
     if (!el.matches || !el.matches('[data-nixsearch-input="q"]')) return;
     clearPendingQueryNavigation();
-    debounce = setTimeout(() => {
-      debounce = null;
-      navigate(buildSearchUrlFromInputs());
-    }, 75);
+    scheduleQueryHistoryBoundary();
+    queryNavigationDebounce = setTimeout(() => {
+      queryNavigationDebounce = null;
+      navigateQueryFromInput();
+    }, QUERY_NAVIGATION_DEBOUNCE_MS);
   });
 
   document.addEventListener("submit", (evt) => {
@@ -693,7 +728,7 @@
     if (form.method && form.method.toLowerCase() !== "get") return;
 
     evt.preventDefault();
-    clearPendingQueryNavigation();
+    resetQueryHistoryGrouping();
 
     const q = form.querySelector('[data-nixsearch-input="q"]');
     if (q) q.blur();
@@ -703,6 +738,7 @@
 
   window.addEventListener("popstate", () => {
     const previous = currentUrl;
+    resetQueryHistoryGrouping();
     syncInputsFromUrl();
     setLoading(shouldLoadResults(previous, currentPublicUrl()));
     syncTitle();
