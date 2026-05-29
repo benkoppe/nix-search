@@ -19,11 +19,12 @@
     const parsed = new URL(url, window.location.href);
     const params = new URLSearchParams(parsed.search);
     const parts = parsed.pathname.split("/").filter(Boolean);
-    const sourceId = params.get("source") === "__SOURCE_ALL_VALUE__"
-      ? ""
-      : parts[0]
-        ? decodeURIComponent(parts[0])
-        : "";
+    const sourceId =
+      params.get("source") === "__SOURCE_ALL_VALUE__"
+        ? ""
+        : parts[0]
+          ? decodeURIComponent(parts[0])
+          : "";
     const q = (params.get("q") || "").trim();
     const titleParts = [];
 
@@ -181,7 +182,8 @@
         ? decodeURIComponent(parts[0])
         : "";
     const ref = sourceAll ? "" : (params.get("ref") || "").trim();
-    const refSet = sourceAll || !source ? (params.get("ref_set") || "").trim() : "";
+    const refSet =
+      sourceAll || !source ? (params.get("ref_set") || "").trim() : "";
 
     return JSON.stringify({ q, source, ref, refSet });
   }
@@ -360,15 +362,28 @@
     return qs ? path + "?" + qs : path;
   }
 
-  function selectSource(sourceId) {
+  function selectSource(
+    sourceId,
+    { push = true, preserveSourceKeyboardHistory = false } = {},
+  ) {
     resetQueryHistoryGrouping();
+    if (!preserveSourceKeyboardHistory) resetSourceKeyboardHistoryGrouping();
     setActiveSourceTab(sourceId);
     populateRefRadios(sourceId);
 
     const dropdown = document.querySelector("[data-nixsearch-overflow-menu]");
     if (dropdown) dropdown.hidden = true;
 
-    navigate(buildSearchUrlFromInputs());
+    return navigate(buildSearchUrlFromInputs(), { push });
+  }
+
+  function selectSourceFromKeyboard(sourceId) {
+    scheduleSourceKeyboardHistoryBoundary();
+    const changed = selectSource(sourceId, {
+      push: nextSourceKeyboardNavigationPushes,
+      preserveSourceKeyboardHistory: true,
+    });
+    if (changed) nextSourceKeyboardNavigationPushes = false;
   }
 
   function cycleSourceFilter(direction) {
@@ -380,7 +395,7 @@
     const nextIndex =
       (startIndex + direction + sourceIds.length) % sourceIds.length;
 
-    selectSource(sourceIds[nextIndex]);
+    selectSourceFromKeyboard(sourceIds[nextIndex]);
     return true;
   }
 
@@ -399,8 +414,9 @@
     const dialog = document.getElementById("entry-modal");
     if (dialog && dialog.open) return false;
 
-    const link = Array.from(document.querySelectorAll("#results-body a.entry-name"))
-      .find((candidate) => candidate.href === lastFocusedResultHref);
+    const link = Array.from(
+      document.querySelectorAll("#results-body a.entry-name"),
+    ).find((candidate) => candidate.href === lastFocusedResultHref);
     if (!link) return false;
 
     link.focus({ preventScroll: true });
@@ -520,7 +536,9 @@
 
     try {
       const copied = document.execCommand("copy");
-      return copied ? Promise.resolve() : Promise.reject(new Error("copy failed"));
+      return copied
+        ? Promise.resolve()
+        : Promise.reject(new Error("copy failed"));
     } finally {
       textarea.remove();
     }
@@ -561,6 +579,7 @@
     const el = evt.target;
     if (!el.matches || !el.matches('[data-nixsearch-input="ref"]')) return;
     resetQueryHistoryGrouping();
+    resetSourceKeyboardHistoryGrouping();
     navigate(buildSearchUrlFromInputs());
   });
 
@@ -578,6 +597,7 @@
         const url = new URL(row.dataset.href, window.location.href);
         if (url.origin === window.location.origin) {
           resetQueryHistoryGrouping();
+          resetSourceKeyboardHistoryGrouping();
           navigate(url.toString());
           return;
         }
@@ -602,6 +622,7 @@
     evt.preventDefault();
     if (link.matches("#results-body a.entry-name")) rememberResultLink(link);
     resetQueryHistoryGrouping();
+    resetSourceKeyboardHistoryGrouping();
     navigate(url.toString(), { syncInputs: true });
   });
 
@@ -623,14 +644,18 @@
 
     evt.preventDefault();
     resetQueryHistoryGrouping();
+    resetSourceKeyboardHistoryGrouping();
     navigate(url);
   });
 
   const QUERY_NAVIGATION_DEBOUNCE_MS = 75;
   const QUERY_HISTORY_DEBOUNCE_MS = 1000;
+  const SOURCE_KEYBOARD_HISTORY_DEBOUNCE_MS = 500;
   let queryNavigationDebounce;
   let queryHistoryDebounce;
   let nextQueryNavigationPushes = true;
+  let sourceKeyboardHistoryDebounce;
+  let nextSourceKeyboardNavigationPushes = true;
 
   function clearPendingQueryNavigation() {
     clearTimeout(queryNavigationDebounce);
@@ -650,6 +675,20 @@
       queryHistoryDebounce = null;
       nextQueryNavigationPushes = true;
     }, QUERY_HISTORY_DEBOUNCE_MS);
+  }
+
+  function resetSourceKeyboardHistoryGrouping() {
+    clearTimeout(sourceKeyboardHistoryDebounce);
+    sourceKeyboardHistoryDebounce = null;
+    nextSourceKeyboardNavigationPushes = true;
+  }
+
+  function scheduleSourceKeyboardHistoryBoundary() {
+    clearTimeout(sourceKeyboardHistoryDebounce);
+    sourceKeyboardHistoryDebounce = setTimeout(() => {
+      sourceKeyboardHistoryDebounce = null;
+      nextSourceKeyboardNavigationPushes = true;
+    }, SOURCE_KEYBOARD_HISTORY_DEBOUNCE_MS);
   }
 
   function navigateQueryFromInput() {
@@ -715,6 +754,7 @@
     const el = evt.target;
     if (!el.matches || !el.matches('[data-nixsearch-input="q"]')) return;
     clearPendingQueryNavigation();
+    resetSourceKeyboardHistoryGrouping();
     scheduleQueryHistoryBoundary();
     queryNavigationDebounce = setTimeout(() => {
       queryNavigationDebounce = null;
@@ -729,6 +769,7 @@
 
     evt.preventDefault();
     resetQueryHistoryGrouping();
+    resetSourceKeyboardHistoryGrouping();
 
     const q = form.querySelector('[data-nixsearch-input="q"]');
     if (q) q.blur();
@@ -739,6 +780,7 @@
   window.addEventListener("popstate", () => {
     const previous = currentUrl;
     resetQueryHistoryGrouping();
+    resetSourceKeyboardHistoryGrouping();
     syncInputsFromUrl();
     setLoading(shouldLoadResults(previous, currentPublicUrl()));
     syncTitle();
