@@ -29,6 +29,16 @@ hjem-rum = ["main"]
 fixtures = ["small"]
 eval-fixture = ["local"]
 
+[ref_sets."26.05"]
+nixpkgs = ["nixos-26.05"]
+nixos = ["nixos-26.05"]
+home-manager = ["release-26.05"]
+darwin = ["nix-darwin-26.05"]
+hjem = ["main"]
+hjem-rum = ["main"]
+fixtures = ["small"]
+eval-fixture = ["local"]
+
 [ref_sets."25.11"]
 nixpkgs = ["nixos-25.11"]
 nixos = ["nixos-25.11"]
@@ -42,22 +52,22 @@ eval-fixture = ["local"]
 [sources.nixpkgs]
 preset = "nixpkgs-packages"
 default_ref = "nixos-unstable"
-preset_refs = ["nixos-unstable", "nixos-25.11"]
+preset_refs = ["nixos-unstable", "nixos-26.05", "nixos-25.11"]
 
 [sources.nixos]
 preset = "nixos-options"
 default_ref = "nixos-unstable"
-preset_refs = ["nixos-unstable", "nixos-25.11"]
+preset_refs = ["nixos-unstable", "nixos-26.05", "nixos-25.11"]
 
 [sources.home-manager]
 preset = "home-manager-options"
 default_ref = "master"
-preset_refs = ["master", "release-25.11"]
+preset_refs = ["master", "release-26.05", "release-25.11"]
 
 [sources.darwin]
 preset = "nix-darwin-options"
 default_ref = "master"
-preset_refs = ["master", "nix-darwin-25.11"]
+preset_refs = ["master", "nix-darwin-26.05", "nix-darwin-25.11"]
 
 [sources.hjem]
 preset = "hjem-options"

@@ -228,6 +228,39 @@ fn loads_example_config_file() {
     let config = AppConfig::load(Some(&path)).unwrap();
 
     assert!(config.sources.contains_key("eval-fixture"));
+    assert_eq!(config.default_ref_set(), Some("unstable"));
+    assert_eq!(
+        config.ref_sets["26.05"].refs["nixpkgs"],
+        vec!["nixos-26.05".to_owned()]
+    );
+    assert_eq!(
+        config.ref_sets["26.05"].refs["nixos"],
+        vec!["nixos-26.05".to_owned()]
+    );
+    assert_eq!(
+        config.ref_sets["26.05"].refs["home-manager"],
+        vec!["release-26.05".to_owned()]
+    );
+    assert_eq!(
+        config.ref_sets["26.05"].refs["darwin"],
+        vec!["nix-darwin-26.05".to_owned()]
+    );
+    assert_eq!(
+        config.ref_sets["26.05"].refs["hjem"],
+        vec!["main".to_owned()]
+    );
+    assert_eq!(
+        config.ref_sets["26.05"].refs["hjem-rum"],
+        vec!["main".to_owned()]
+    );
+    assert_eq!(
+        config.ref_sets["26.05"].refs["fixtures"],
+        vec!["small".to_owned()]
+    );
+    assert_eq!(
+        config.ref_sets["26.05"].refs["eval-fixture"],
+        vec!["local".to_owned()]
+    );
 }
 
 #[test]
