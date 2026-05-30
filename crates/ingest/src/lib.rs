@@ -115,21 +115,56 @@ fn convert_option(name: String, raw: RawOption, context: &IngestContext) -> Opti
 
 fn doc_text_from_value(value: Value) -> DocText {
     match value {
+        Value::String(value) if looks_like_docbook_text(&value) => DocText::DocBook(value),
         Value::String(value) => DocText::Markdown(value),
         Value::Object(object) => {
+            let original = Value::Object(object.clone());
             let doc_type = object.get("_type").and_then(Value::as_str);
             let text = object.get("text").and_then(Value::as_str);
 
             match (doc_type, text) {
                 (Some("mdDoc" | "literalMD"), Some(text)) => DocText::Markdown(text.to_owned()),
                 (Some("literalDocBook"), Some(text)) => DocText::DocBook(text.to_owned()),
-                (Some("literalExpression" | "literalExample"), Some(text))
-                | (Some(_), Some(text)) => DocText::Plain(text.to_owned()),
-                _ => DocText::Plain(Value::Object(object).to_string()),
+                (Some("literalExpression" | "literalExample"), Some(text)) => {
+                    DocText::Plain(text.to_owned())
+                }
+                (Some(_), Some(text)) => DocText::Unknown {
+                    text: text.to_owned(),
+                    raw: original,
+                },
+                _ => DocText::Json(original),
             }
         }
-        other => DocText::Plain(other.to_string()),
+        other => DocText::Json(other),
     }
+}
+
+fn looks_like_docbook_text(value: &str) -> bool {
+    let value = value.trim_start();
+    let Some(value) = value.strip_prefix('<') else {
+        return false;
+    };
+
+    let name_end = value
+        .find(|ch: char| ch.is_ascii_whitespace() || ch == '>' || ch == '/')
+        .unwrap_or(value.len());
+    matches!(
+        &value[..name_end],
+        "para"
+            | "simpara"
+            | "literal"
+            | "programlisting"
+            | "itemizedlist"
+            | "orderedlist"
+            | "variablelist"
+            | "emphasis"
+            | "filename"
+            | "command"
+            | "option"
+            | "varname"
+            | "link"
+            | "xref"
+    )
 }
 
 fn doc_value_from_value(value: Value) -> DocValue {
@@ -497,14 +532,23 @@ mod tests {
     fn parses_option_doc_text_objects_without_losing_text() {
         let json = r#"
            {
-             "programs.example.unknown": {
-               "description": { "_type": "unknownDoc", "text": "Preserved text." }
-             },
-             "programs.example.docbook": {
-               "description": { "_type": "literalDocBook", "text": "<para>Hello</para>" }
-             },
-             "programs.example.object": {
-               "description": { "unexpected": true }
+              "programs.example.unknown": {
+                "description": { "_type": "unknownDoc", "text": "Preserved text.", "extra": true }
+              },
+              "programs.example.docbook": {
+                "description": { "_type": "literalDocBook", "text": "<para>Hello</para>" }
+              },
+              "programs.example.docbook-string": {
+                "description": "<para>Hello <literal>world</literal></para>"
+              },
+              "programs.example.docbook-emphasis-string": {
+                "description": "<emphasis>Hello</emphasis>"
+              },
+              "programs.example.docbook-variablelist-string": {
+                "description": "<variablelist><varlistentry><term>foo</term><listitem><para>bar</para></listitem></varlistentry></variablelist>"
+              },
+              "programs.example.object": {
+                "description": { "unexpected": true }
              }
            }
            "#;
@@ -523,15 +567,38 @@ mod tests {
 
         assert_eq!(
             descriptions["programs.example.unknown"],
-            &Some(DocText::Plain("Preserved text.".to_owned()))
+            &Some(DocText::Unknown {
+                text: "Preserved text.".to_owned(),
+                raw: serde_json::json!({
+                    "_type": "unknownDoc",
+                    "text": "Preserved text.",
+                    "extra": true
+                })
+            })
         );
         assert_eq!(
             descriptions["programs.example.docbook"],
             &Some(DocText::DocBook("<para>Hello</para>".to_owned()))
         );
         assert_eq!(
+            descriptions["programs.example.docbook-string"],
+            &Some(DocText::DocBook(
+                "<para>Hello <literal>world</literal></para>".to_owned()
+            ))
+        );
+        assert_eq!(
+            descriptions["programs.example.docbook-emphasis-string"],
+            &Some(DocText::DocBook("<emphasis>Hello</emphasis>".to_owned()))
+        );
+        assert_eq!(
+            descriptions["programs.example.docbook-variablelist-string"],
+            &Some(DocText::DocBook(
+                "<variablelist><varlistentry><term>foo</term><listitem><para>bar</para></listitem></varlistentry></variablelist>".to_owned()
+            ))
+        );
+        assert_eq!(
             descriptions["programs.example.object"],
-            &Some(DocText::Plain(r#"{"unexpected":true}"#.to_owned()))
+            &Some(DocText::Json(serde_json::json!({ "unexpected": true })))
         );
     }
 

@@ -1,5 +1,7 @@
 use std::borrow::Cow;
 
+use comrak::nodes::{AstNode, NodeValue};
+use comrak::{Arena, Options, parse_document};
 use html_escape::decode_html_entities;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -82,11 +84,13 @@ pub struct OptionDoc {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "kind", content = "text", rename_all = "kebab-case")]
+#[serde(tag = "kind", content = "value", rename_all = "kebab-case")]
 pub enum DocText {
     Markdown(String),
     DocBook(String),
     Plain(String),
+    Unknown { text: String, raw: Value },
+    Json(Value),
 }
 
 impl DocText {
@@ -95,6 +99,8 @@ impl DocText {
             Self::Markdown(value) => Cow::Owned(markdown_to_plain_text(value)),
             Self::DocBook(value) => Cow::Owned(docbook_to_plain_text(value)),
             Self::Plain(value) => Cow::Borrowed(value),
+            Self::Unknown { text, .. } => Cow::Borrowed(text),
+            Self::Json(value) => Cow::Owned(value.to_string()),
         }
     }
 }
@@ -128,32 +134,78 @@ impl DocValue {
 }
 
 pub fn markdown_to_plain_text(value: &str) -> String {
-    let value = strip_html_to_text_preserve_lines(value);
     let value = strip_nix_doc_roles(&value);
+    let arena = Arena::new();
+    let mut options = Options::default();
+    options.extension.table = true;
+    let root = parse_document(&arena, &value, &options);
     let mut output = String::with_capacity(value.len());
-    let mut chars = value.chars().peekable();
 
-    while let Some(ch) = chars.next() {
-        match ch {
-            '[' => {}
-            ']' if chars.peek() == Some(&'(') => {
-                for ch in chars.by_ref() {
-                    if ch == ')' {
-                        break;
-                    }
-                }
+    append_markdown_plain_text(root, &mut output);
+
+    collapse_line_whitespace(&output)
+}
+
+fn append_markdown_plain_text<'a>(node: &'a AstNode<'a>, output: &mut String) {
+    let mut skip_children = false;
+    let mut trailing_separator = None;
+
+    {
+        let data = node.data.borrow();
+        match &data.value {
+            NodeValue::Text(value) | NodeValue::Raw(value) => output.push_str(value),
+            NodeValue::Code(value) => output.push_str(&value.literal),
+            NodeValue::CodeBlock(value) => {
+                push_line_separator(output);
+                output.push_str(value.literal.trim_end());
+                trailing_separator = Some('\n');
+                skip_children = true;
             }
-            '*' | '_' | '`' | '#' | '~' => output.push(' '),
-            '\\' => {
-                if let Some(ch) = chars.next() {
-                    output.push(ch);
-                }
+            NodeValue::HtmlBlock(value) => {
+                push_line_separator(output);
+                output.push_str(&strip_html_to_text_preserve_lines(&value.literal));
+                trailing_separator = Some('\n');
+                skip_children = true;
             }
-            ch => output.push(ch),
+            NodeValue::HtmlInline(value) => {
+                output.push_str(&strip_html_to_text_preserve_lines(value))
+            }
+            NodeValue::SoftBreak | NodeValue::LineBreak => output.push('\n'),
+            NodeValue::ThematicBreak => trailing_separator = Some('\n'),
+            NodeValue::TableCell => trailing_separator = Some(' '),
+            NodeValue::Paragraph
+            | NodeValue::Heading(_)
+            | NodeValue::Item(_)
+            | NodeValue::DescriptionTerm
+            | NodeValue::DescriptionDetails
+            | NodeValue::TableRow(_) => trailing_separator = Some('\n'),
+            _ => {}
         }
     }
 
-    collapse_line_whitespace(&output)
+    if !skip_children {
+        for child in node.children() {
+            append_markdown_plain_text(child, output);
+        }
+    }
+
+    match trailing_separator {
+        Some('\n') => push_line_separator(output),
+        Some(' ') => push_space_separator(output),
+        _ => {}
+    }
+}
+
+fn push_line_separator(output: &mut String) {
+    if !output.is_empty() && !output.ends_with('\n') {
+        output.push('\n');
+    }
+}
+
+fn push_space_separator(output: &mut String) {
+    if !output.is_empty() && !output.chars().next_back().is_some_and(char::is_whitespace) {
+        output.push(' ');
+    }
 }
 
 pub fn docbook_to_plain_text(value: &str) -> String {
@@ -213,6 +265,7 @@ fn is_known_markup_tag(tag: &str) -> bool {
             | "command"
             | "div"
             | "em"
+            | "emphasis"
             | "filename"
             | "itemizedlist"
             | "li"
@@ -233,11 +286,14 @@ fn is_known_markup_tag(tag: &str) -> bool {
             | "table"
             | "tbody"
             | "td"
+            | "term"
             | "th"
             | "thead"
             | "tr"
             | "ul"
             | "varname"
+            | "variablelist"
+            | "varlistentry"
             | "xref"
     )
 }
@@ -265,10 +321,13 @@ fn is_spacing_markup_tag(tag: &str) -> bool {
             | "table"
             | "tbody"
             | "td"
+            | "term"
             | "th"
             | "thead"
             | "tr"
             | "ul"
+            | "variablelist"
+            | "varlistentry"
     )
 }
 
@@ -510,6 +569,22 @@ mod tests {
     }
 
     #[test]
+    fn docbook_plain_text_strips_emphasis_and_variable_lists() {
+        let value = DocText::DocBook(
+            "<variablelist><varlistentry><term><emphasis>foo</emphasis></term><listitem><para>bar</para></listitem></varlistentry></variablelist>"
+                .to_owned(),
+        );
+
+        let text = value.plain_text();
+
+        assert!(text.contains("foo"));
+        assert!(text.contains("bar"));
+        assert!(!text.contains("<emphasis>"));
+        assert!(!text.contains("<variablelist>"));
+        assert!(!text.contains("<varlistentry>"));
+    }
+
+    #[test]
     fn markdown_plain_text_strips_html_and_markup() {
         let value = DocText::Markdown(
             "Use **Git** and {option}`programs.git.enable` <em>safely</em>.".to_owned(),
@@ -531,6 +606,49 @@ mod tests {
             value.plain_text(),
             "Configure services.<name>.enable with paths like <path>."
         );
+    }
+
+    #[test]
+    fn markdown_plain_text_preserves_identifiers_and_code() {
+        let value = DocText::Markdown(
+            "Use `ip_forward` with services.foo_bar.enable and **bold_name**.".to_owned(),
+        );
+
+        assert_eq!(
+            value.plain_text(),
+            "Use ip_forward with services.foo_bar.enable and bold_name."
+        );
+    }
+
+    #[test]
+    fn markdown_plain_text_uses_link_labels_not_destinations() {
+        let value =
+            DocText::Markdown("Read [the manual](https://example.invalid/path).".to_owned());
+
+        assert_eq!(value.plain_text(), "Read the manual.");
+    }
+
+    #[test]
+    fn markdown_plain_text_extracts_blocks_and_tables() {
+        let value = DocText::Markdown(
+            "# Heading\n\n- first_item\n- second_item\n\n| A | B |\n| - | - |\n| c_d | e |"
+                .to_owned(),
+        );
+
+        assert_eq!(
+            value.plain_text(),
+            "Heading\nfirst_item\nsecond_item\nA B\nc_d e"
+        );
+    }
+
+    #[test]
+    fn unknown_doc_text_indexes_from_text_and_preserves_raw() {
+        let value = DocText::Unknown {
+            text: "Readable text.".to_owned(),
+            raw: serde_json::json!({ "_type": "custom", "text": "Readable text." }),
+        };
+
+        assert_eq!(value.plain_text(), "Readable text.");
     }
 
     #[test]

@@ -10,3 +10,4 @@ serde_json.workspace = true
 time.workspace = true
 thiserror.workspace = true
 html-escape.workspace = true
+comrak.workspace = true

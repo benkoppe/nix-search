@@ -1,5 +1,6 @@
 use std::borrow::Cow;
 use std::fmt::Write;
+use std::sync::OnceLock;
 
 use comrak::{Options, markdown_to_html};
 use html_escape::encode_safe;
@@ -52,7 +53,11 @@ impl CodeHighlighter for LumisHighlighter {
             CodeLanguage::PlainText => Language::PlainText,
         };
 
-        let theme = themes::get("onedark").ok()?;
+        static ONEDARK_THEME: OnceLock<Option<themes::Theme>> = OnceLock::new();
+
+        let theme = ONEDARK_THEME
+            .get_or_init(|| themes::get("onedark").ok())
+            .clone()?;
         let formatter = HtmlInlineBuilder::new()
             .language(language)
             .theme(Some(theme))
@@ -70,6 +75,8 @@ pub fn render_doc_text(value: &DocText) -> Markup {
         DocText::Markdown(value) => render_markdown(value),
         DocText::DocBook(value) => html! { p { (docbook_to_plain_text(value)) } },
         DocText::Plain(value) => html! { p { (value) } },
+        DocText::Unknown { text, .. } => html! { p { (text) } },
+        DocText::Json(value) => render_code(CodeLanguage::Nix, &format_nix(&json_to_nix(value))),
     }
 }
 
@@ -118,6 +125,7 @@ fn render_markdown(value: &str) -> Markup {
     let mut code_blocks = Vec::new();
     let markdown = extract_fenced_code_blocks(&markdown, &mut code_blocks);
     let mut options = Options::default();
+    options.extension.table = true;
     options.render.unsafe_ = false;
     let html = markdown_to_html(&markdown, &options);
     let mut html = ammonia::Builder::default()
@@ -129,11 +137,27 @@ fn render_markdown(value: &str) -> Markup {
 
     for (index, code_block) in code_blocks.into_iter().enumerate() {
         let placeholder = code_block_placeholder(index);
-        html = html.replace(&format!("<p>{placeholder}</p>"), &code_block);
-        html = html.replace(&placeholder, &code_block);
+        html = replace_code_block_placeholder(html, &placeholder, &code_block);
     }
 
     html! { div.doc-content { (PreEscaped(html)) } }
+}
+
+fn replace_code_block_placeholder(mut html: String, placeholder: &str, code_block: &str) -> String {
+    html = html.replace(&format!("<p>{placeholder}</p>"), code_block);
+
+    for closing_tag in ["</li>", "</blockquote>", "</td>"] {
+        html = html.replace(
+            &format!("\n{placeholder}{closing_tag}"),
+            &format!("\n{code_block}{closing_tag}"),
+        );
+        html = html.replace(
+            &format!("\n{placeholder}\n{closing_tag}"),
+            &format!("\n{code_block}\n{closing_tag}"),
+        );
+    }
+
+    html
 }
 
 fn extract_fenced_code_blocks(value: &str, code_blocks: &mut Vec<String>) -> String {
@@ -159,7 +183,7 @@ fn extract_fenced_code_blocks(value: &str, code_blocks: &mut Vec<String>) -> Str
                 break;
             }
 
-            code.push_str(lines[code_index]);
+            push_dedented_code_line(&mut code, lines[code_index], opening.indent);
             code_index += 1;
         }
 
@@ -169,6 +193,7 @@ fn extract_fenced_code_blocks(value: &str, code_blocks: &mut Vec<String>) -> Str
             let placeholder = code_block_placeholder(code_blocks.len());
 
             code_blocks.push(render_code(language, &formatted).into_string());
+            output.push_str(&" ".repeat(opening.indent));
             output.push_str(&placeholder);
             output.push('\n');
             index = closing_index + 1;
@@ -182,14 +207,25 @@ fn extract_fenced_code_blocks(value: &str, code_blocks: &mut Vec<String>) -> Str
     output
 }
 
+fn push_dedented_code_line(output: &mut String, line: &str, indent: usize) {
+    let spaces = line
+        .bytes()
+        .take_while(|&byte| byte == b' ')
+        .count()
+        .min(indent);
+
+    output.push_str(&line[spaces..]);
+}
+
 fn code_block_placeholder(index: usize) -> String {
-    format!("@@NIXSEARCH_CODE_BLOCK_{index}@@")
+    format!("\u{e000}NIXSEARCH_CODE_BLOCK_{index}\u{e001}")
 }
 
 #[derive(Debug, Clone, Copy)]
 struct Fence<'a> {
     marker: char,
     length: usize,
+    indent: usize,
     info: &'a str,
 }
 
@@ -233,6 +269,7 @@ fn opening_fence(line: &str) -> Option<Fence<'_>> {
     Some(Fence {
         marker,
         length,
+        indent,
         info,
     })
 }
@@ -609,6 +646,21 @@ mod tests {
     }
 
     #[test]
+    fn docbook_renders_extended_tags_as_readable_plain_text() {
+        let rendered = render_doc_text(&DocText::DocBook(
+            "<variablelist><varlistentry><term><emphasis>foo</emphasis></term><listitem><para>bar</para></listitem></varlistentry></variablelist>"
+                .to_owned(),
+        ))
+        .into_string();
+
+        assert!(rendered.contains("foo"));
+        assert!(rendered.contains("bar"));
+        assert!(!rendered.contains("emphasis"));
+        assert!(!rendered.contains("variablelist"));
+        assert!(!rendered.contains("varlistentry"));
+    }
+
+    #[test]
     fn docbook_value_does_not_render_executable_html() {
         let rendered = render_doc_value(&DocValue::DocBook(
             "<para>Hello<script>alert('no')</script></para>".to_owned(),
@@ -687,6 +739,75 @@ mod tests {
         assert!(rendered.contains("code-block"));
         assert!(rendered.contains("language-nix"));
         assert!(rendered.contains("foo"));
+    }
+
+    #[test]
+    fn markdown_code_block_placeholders_are_not_replaced_in_links() {
+        let placeholder = code_block_placeholder(0);
+        let rendered = render_doc_text(&DocText::Markdown(format!(
+            "[link]({placeholder})\n\n```nix\n{{ }}\n```"
+        )))
+        .into_string();
+
+        assert_eq!(rendered.matches("<pre").count(), 1);
+        assert!(!rendered.contains("href=\"<pre"));
+        assert!(!rendered.contains("href=\"&lt;pre"));
+    }
+
+    #[test]
+    fn markdown_tables_are_rendered() {
+        let rendered = render_doc_text(&DocText::Markdown(
+            "| Name | Value |\n| --- | --- |\n| foo | bar |".to_owned(),
+        ))
+        .into_string();
+
+        assert!(rendered.contains("<table>"));
+        assert!(rendered.contains("<th>Name</th>"));
+        assert!(rendered.contains("<td>bar</td>"));
+    }
+
+    #[test]
+    fn markdown_fences_inside_lists_stay_nested() {
+        let rendered = render_doc_text(&DocText::Markdown(
+            "- item\n\n  ```nix\n  { foo = \"bar\"; }\n  ```".to_owned(),
+        ))
+        .into_string();
+
+        assert!(rendered.contains("<pre"));
+        assert!(rendered.find("<li>").unwrap() < rendered.find("item").unwrap());
+        assert!(rendered.find("item").unwrap() < rendered.find("<pre").unwrap());
+        assert!(rendered.find("<pre").unwrap() < rendered.find("</li>").unwrap());
+    }
+
+    #[test]
+    fn markdown_fences_inside_tight_lists_are_replaced() {
+        let rendered = render_doc_text(&DocText::Markdown(
+            "- item\n  ```nix\n  { foo = \"bar\"; }\n  ```".to_owned(),
+        ))
+        .into_string();
+
+        assert!(rendered.contains("<pre"));
+        assert!(!rendered.contains(&code_block_placeholder(0)));
+        assert!(rendered.find("item").unwrap() < rendered.find("<pre").unwrap());
+        assert!(rendered.find("<pre").unwrap() < rendered.find("</li>").unwrap());
+    }
+
+    #[test]
+    fn markdown_fences_inside_lists_are_dedented() {
+        let mut code_blocks = Vec::new();
+        let markdown = extract_fenced_code_blocks(
+            "- item\n\n  ```text\n  hello\n    world\n  ```",
+            &mut code_blocks,
+        );
+
+        assert_eq!(
+            markdown,
+            "- item\n\n  \u{e000}NIXSEARCH_CODE_BLOCK_0\u{e001}\n"
+        );
+        assert_eq!(code_blocks.len(), 1);
+        assert!(code_blocks[0].contains("hello"));
+        assert!(code_blocks[0].contains("  world"));
+        assert!(!code_blocks[0].contains("  hello"));
     }
 
     #[test]
