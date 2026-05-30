@@ -444,12 +444,13 @@ mod tests {
     fn parses_option_doc_values_semantically() {
         let json = r#"
            {
-             "programs.firefox.profiles.<name>.settings": {
-               "description": "Attribute set of Firefox preferences.",
-               "default": { "_type": "literalExpression", "text": "{ }" },
-               "example": {
-                 "_type": "literalExpression",
-                 "text": "{\n  \"browser.startup.homepage\" = \"https://nixos.org\";\n}\n"
+              "programs.firefox.profiles.<name>.settings": {
+                "description": "Attribute set of Firefox preferences.",
+                "default": { "_type": "literalExpression", "text": "{ }" },
+                "relatedPackages": { "_type": "mdDoc", "text": "Use `firefox`." },
+                "example": {
+                  "_type": "literalExpression",
+                  "text": "{\n  \"browser.startup.homepage\" = \"https://nixos.org\";\n}\n"
                }
              }
            }
@@ -468,6 +469,10 @@ mod tests {
         );
         assert!(
             matches!(option.example, Some(DocValue::NixExpression(ref text)) if text.contains("browser.startup.homepage"))
+        );
+        assert_eq!(
+            option.related_packages,
+            Some(DocText::Markdown("Use `firefox`.".to_owned()))
         );
     }
 

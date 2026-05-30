@@ -7,7 +7,10 @@ use std::sync::OnceLock;
 use comrak::{Options, markdown_to_html};
 use html_escape::encode_safe;
 use maud::{Markup, PreEscaped, html};
-use nixsearch_core::document::{docbook_to_plain_text, nix_doc_role_at_start};
+use nixsearch_core::document::{
+    docbook_to_plain_text, markdown_closing_fence, markdown_opening_fence, nix_doc_role_at_start,
+    strip_markdown_quote_prefix,
+};
 use serde_json::Value;
 
 use nixsearch_core::document::{DocText, DocValue};
@@ -170,6 +173,8 @@ fn replace_code_block_placeholder(mut html: String, placeholder: &str, code_bloc
         }
     }
 
+    replace_once(&mut html, placeholder, code_block);
+
     html
 }
 
@@ -194,7 +199,7 @@ fn extract_fenced_code_blocks(value: &str, code_blocks: &mut Vec<ExtractedCodeBl
 
     while index < lines.len() {
         let line = lines[index];
-        let Some(opening) = opening_fence(line) else {
+        let Some(opening) = markdown_opening_fence(line) else {
             output.push_str(line);
             index += 1;
             continue;
@@ -205,18 +210,18 @@ fn extract_fenced_code_blocks(value: &str, code_blocks: &mut Vec<ExtractedCodeBl
         let mut code_index = index + 1;
 
         while code_index < lines.len() {
-            if closing_fence(lines[code_index], opening.marker()) {
+            if markdown_closing_fence(lines[code_index], opening.marker()) {
                 closing_index = Some(code_index);
                 break;
             }
 
-            let code_line = strip_quote_prefix(lines[code_index], opening.quote_prefix);
-            push_dedented_code_line(&mut code, code_line, opening.indent);
+            let code_line = strip_markdown_quote_prefix(lines[code_index], opening.quote_prefix());
+            push_dedented_code_line(&mut code, code_line, opening.indent());
             code_index += 1;
         }
 
         if let Some(closing_index) = closing_index {
-            let language = language_from_info(opening.info, &code);
+            let language = language_from_info(opening.info(), &code);
             let formatted = format_code(language, &code);
             let placeholder = code_block_placeholder(code_blocks.len(), &code, value);
 
@@ -224,8 +229,8 @@ fn extract_fenced_code_blocks(value: &str, code_blocks: &mut Vec<ExtractedCodeBl
                 placeholder: placeholder.clone(),
                 html: render_code(language, &formatted).into_string(),
             });
-            output.push_str(opening.quote_prefix);
-            output.push_str(&" ".repeat(opening.indent));
+            output.push_str(opening.quote_prefix());
+            output.push_str(&" ".repeat(opening.indent()));
             output.push_str(&placeholder);
             output.push('\n');
             index = closing_index + 1;
@@ -250,123 +255,24 @@ fn push_dedented_code_line(output: &mut String, line: &str, indent: usize) {
 }
 
 fn code_block_placeholder(index: usize, code: &str, document: &str) -> String {
-    let mut hasher = DefaultHasher::new();
-    index.hash(&mut hasher);
-    code.hash(&mut hasher);
-    document.len().hash(&mut hasher);
+    for salt in 0usize.. {
+        let mut hasher = DefaultHasher::new();
+        index.hash(&mut hasher);
+        salt.hash(&mut hasher);
+        code.hash(&mut hasher);
+        document.len().hash(&mut hasher);
 
-    format!(
-        "\u{e000}NIXSEARCH_CODE_BLOCK_{index}_{:016x}\u{e001}",
-        hasher.finish()
-    )
-}
+        let placeholder = format!(
+            "\u{e000}NIXSEARCH_CODE_BLOCK_{index}_{:016x}\u{e001}",
+            hasher.finish()
+        );
 
-#[derive(Debug, Clone, Copy)]
-struct Fence<'a> {
-    marker: char,
-    length: usize,
-    indent: usize,
-    info: &'a str,
-    quote_prefix: &'a str,
-}
-
-impl<'a> Fence<'a> {
-    fn marker(self) -> FenceMarker<'a> {
-        FenceMarker {
-            marker: self.marker,
-            length: self.length,
-            quote_prefix: self.quote_prefix,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-struct FenceMarker<'a> {
-    marker: char,
-    length: usize,
-    quote_prefix: &'a str,
-}
-
-fn opening_fence(line: &str) -> Option<Fence<'_>> {
-    let line = strip_line_ending(line);
-    let (quote_prefix, line) = split_quote_prefix(line);
-    let (indent, rest) = leading_spaces(line);
-    if indent > 3 {
-        return None;
-    }
-
-    let marker = rest.chars().next()?;
-    if !matches!(marker, '`' | '~') {
-        return None;
-    }
-
-    let length = rest.chars().take_while(|&ch| ch == marker).count();
-    if length < 3 {
-        return None;
-    }
-
-    let info = rest[length..].trim();
-    if marker == '`' && info.contains('`') {
-        return None;
-    }
-
-    Some(Fence {
-        marker,
-        length,
-        indent,
-        info,
-        quote_prefix,
-    })
-}
-
-fn closing_fence(line: &str, opening: FenceMarker<'_>) -> bool {
-    let line = strip_line_ending(line);
-    let line = strip_quote_prefix(line, opening.quote_prefix);
-    let (indent, rest) = leading_spaces(line);
-    if indent > 3 || !rest.starts_with(opening.marker) {
-        return false;
-    }
-
-    let length = rest.chars().take_while(|&ch| ch == opening.marker).count();
-
-    length >= opening.length && rest[length..].trim().is_empty()
-}
-
-fn strip_line_ending(line: &str) -> &str {
-    line.trim_end_matches(['\r', '\n'])
-}
-
-fn leading_spaces(value: &str) -> (usize, &str) {
-    let count = value.bytes().take_while(|&byte| byte == b' ').count();
-    (count, &value[count..])
-}
-
-fn split_quote_prefix(line: &str) -> (&str, &str) {
-    let (indent, mut rest) = leading_spaces(line);
-    if indent > 3 || !rest.starts_with('>') {
-        return ("", line);
-    }
-
-    let mut prefix_len = indent;
-    while rest.starts_with('>') {
-        prefix_len += 1;
-        rest = &line[prefix_len..];
-
-        if rest.starts_with(' ') {
-            prefix_len += 1;
-            rest = &line[prefix_len..];
+        if !document.contains(&placeholder) {
+            return placeholder;
         }
     }
 
-    (&line[..prefix_len], &line[prefix_len..])
-}
-
-fn strip_quote_prefix<'a>(line: &'a str, quote_prefix: &str) -> &'a str {
-    if quote_prefix.is_empty() {
-        line
-    } else {
-        line.strip_prefix(quote_prefix).unwrap_or(line)
-    }
+    unreachable!("unbounded salt search always returns")
 }
 
 fn language_from_info(info: &str, code: &str) -> CodeLanguage {
@@ -413,13 +319,13 @@ fn preprocess_nix_doc_roles(value: &str) -> String {
 
         if let Some(fence) = in_fence {
             output.push_str(line);
-            if closing_fence(line_without_newline, fence) {
+            if markdown_closing_fence(line_without_newline, fence) {
                 in_fence = None;
             }
             continue;
         }
 
-        if let Some(fence) = opening_fence(line_without_newline) {
+        if let Some(fence) = markdown_opening_fence(line_without_newline) {
             in_fence = Some(fence.marker());
             output.push_str(line);
             continue;
@@ -811,6 +717,41 @@ mod tests {
         assert_eq!(rendered.matches("<pre").count(), 1);
         assert!(!rendered.contains("href=\"<pre"));
         assert!(!rendered.contains("href=\"&lt;pre"));
+    }
+
+    #[test]
+    fn generated_code_block_placeholders_avoid_document_collisions() {
+        let first = code_block_placeholder(0, "{ }", "document");
+        let document = format!("user text containing {first}");
+        let second = code_block_placeholder(0, "{ }", &document);
+
+        assert_ne!(first, second);
+        assert!(!document.contains(&second));
+    }
+
+    #[test]
+    fn code_block_placeholder_replacement_falls_back_without_leaking() {
+        let placeholder = "\u{e000}NIXSEARCH_CODE_BLOCK_0_test\u{e001}";
+        let html = replace_code_block_placeholder(
+            format!("<div>{placeholder}</div>"),
+            placeholder,
+            "<pre class=\"code-block\"><code>{ }</code></pre>",
+        );
+
+        assert!(html.contains("code-block"));
+        assert!(!html.contains("NIXSEARCH_CODE_BLOCK_0"));
+    }
+
+    #[test]
+    fn multiple_markdown_code_blocks_render_in_order() {
+        let rendered = render_doc_text(&DocText::Markdown(
+            "```nix\n{ first = true; }\n```\n\n```json\n{\"second\":true}\n```".to_owned(),
+        ))
+        .into_string();
+
+        assert_eq!(rendered.matches("<pre").count(), 2);
+        assert!(rendered.find("first").unwrap() < rendered.find("second").unwrap());
+        assert!(!rendered.contains("NIXSEARCH_CODE_BLOCK"));
     }
 
     #[test]
