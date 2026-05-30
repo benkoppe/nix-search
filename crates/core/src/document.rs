@@ -134,7 +134,7 @@ impl DocValue {
 }
 
 pub fn markdown_to_plain_text(value: &str) -> String {
-    let value = strip_nix_doc_roles(&value);
+    let value = strip_nix_doc_roles(value);
     let arena = Arena::new();
     let mut options = Options::default();
     options.extension.table = true;
@@ -212,6 +212,19 @@ pub fn docbook_to_plain_text(value: &str) -> String {
     strip_html_to_text(value)
 }
 
+pub fn looks_like_docbook_text(value: &str) -> bool {
+    let value = value.trim_start();
+    let Some(value) = value.strip_prefix('<') else {
+        return false;
+    };
+
+    let name_end = value
+        .find(|ch: char| ch.is_ascii_whitespace() || ch == '>' || ch == '/')
+        .unwrap_or(value.len());
+
+    is_known_markup_tag_name(&value[..name_end])
+}
+
 fn strip_html_to_text(value: &str) -> String {
     collapse_whitespace(&strip_html_to_text_preserve_lines(value))
 }
@@ -255,6 +268,10 @@ fn is_known_markup_tag(tag: &str) -> bool {
         return false;
     };
 
+    is_known_markup_tag_name(name)
+}
+
+fn is_known_markup_tag_name(name: &str) -> bool {
     matches!(
         name,
         "a" | "abbr"
@@ -373,7 +390,7 @@ fn strip_nix_doc_roles(value: &str) -> String {
     output
 }
 
-fn nix_doc_role_at_start(value: &str) -> Option<(&str, &str)> {
+pub fn nix_doc_role_at_start(value: &str) -> Option<(&str, &str)> {
     let role_end = value.strip_prefix('{')?.find("}`")? + 1;
     let role = &value[1..role_end];
     if !matches!(
@@ -389,7 +406,18 @@ fn nix_doc_role_at_start(value: &str) -> Option<(&str, &str)> {
 }
 
 fn collapse_whitespace(value: &str) -> String {
-    value.split_whitespace().collect::<Vec<_>>().join(" ")
+    let mut output = String::with_capacity(value.len());
+    let mut pending_space = false;
+
+    for part in value.split_whitespace() {
+        if pending_space {
+            output.push(' ');
+        }
+        output.push_str(part);
+        pending_space = true;
+    }
+
+    output
 }
 
 fn collapse_line_whitespace(value: &str) -> String {

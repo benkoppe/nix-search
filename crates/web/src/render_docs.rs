@@ -1,11 +1,13 @@
 use std::borrow::Cow;
+use std::collections::hash_map::DefaultHasher;
 use std::fmt::Write;
+use std::hash::{Hash, Hasher};
 use std::sync::OnceLock;
 
 use comrak::{Options, markdown_to_html};
 use html_escape::encode_safe;
 use maud::{Markup, PreEscaped, html};
-use nixsearch_core::document::docbook_to_plain_text;
+use nixsearch_core::document::{docbook_to_plain_text, nix_doc_role_at_start};
 use serde_json::Value;
 
 use nixsearch_core::document::{DocText, DocValue};
@@ -135,32 +137,51 @@ fn render_markdown(value: &str) -> Markup {
         .clean(&html)
         .to_string();
 
-    for (index, code_block) in code_blocks.into_iter().enumerate() {
-        let placeholder = code_block_placeholder(index);
-        html = replace_code_block_placeholder(html, &placeholder, &code_block);
+    for code_block in code_blocks {
+        let placeholder = code_block.placeholder;
+        html = replace_code_block_placeholder(html, &placeholder, &code_block.html);
     }
 
     html! { div.doc-content { (PreEscaped(html)) } }
 }
 
 fn replace_code_block_placeholder(mut html: String, placeholder: &str, code_block: &str) -> String {
-    html = html.replace(&format!("<p>{placeholder}</p>"), code_block);
+    if replace_once(&mut html, &format!("<p>{placeholder}</p>"), code_block) {
+        return html;
+    }
 
     for closing_tag in ["</li>", "</blockquote>", "</td>"] {
-        html = html.replace(
+        if replace_once(
+            &mut html,
             &format!("\n{placeholder}{closing_tag}"),
             &format!("\n{code_block}{closing_tag}"),
-        );
-        html = html.replace(
+        ) || replace_once(
+            &mut html,
             &format!("\n{placeholder}\n{closing_tag}"),
             &format!("\n{code_block}\n{closing_tag}"),
-        );
+        ) {
+            return html;
+        }
     }
 
     html
 }
 
-fn extract_fenced_code_blocks(value: &str, code_blocks: &mut Vec<String>) -> String {
+fn replace_once(value: &mut String, needle: &str, replacement: &str) -> bool {
+    let Some(start) = value.find(needle) else {
+        return false;
+    };
+
+    value.replace_range(start..start + needle.len(), replacement);
+    true
+}
+
+struct ExtractedCodeBlock {
+    placeholder: String,
+    html: String,
+}
+
+fn extract_fenced_code_blocks(value: &str, code_blocks: &mut Vec<ExtractedCodeBlock>) -> String {
     let mut output = String::with_capacity(value.len());
     let lines = value.split_inclusive('\n').collect::<Vec<_>>();
     let mut index = 0;
@@ -190,9 +211,12 @@ fn extract_fenced_code_blocks(value: &str, code_blocks: &mut Vec<String>) -> Str
         if let Some(closing_index) = closing_index {
             let language = language_from_info(opening.info, &code);
             let formatted = format_code(language, &code);
-            let placeholder = code_block_placeholder(code_blocks.len());
+            let placeholder = code_block_placeholder(code_blocks.len(), &code, value);
 
-            code_blocks.push(render_code(language, &formatted).into_string());
+            code_blocks.push(ExtractedCodeBlock {
+                placeholder: placeholder.clone(),
+                html: render_code(language, &formatted).into_string(),
+            });
             output.push_str(&" ".repeat(opening.indent));
             output.push_str(&placeholder);
             output.push('\n');
@@ -217,8 +241,16 @@ fn push_dedented_code_line(output: &mut String, line: &str, indent: usize) {
     output.push_str(&line[spaces..]);
 }
 
-fn code_block_placeholder(index: usize) -> String {
-    format!("\u{e000}NIXSEARCH_CODE_BLOCK_{index}\u{e001}")
+fn code_block_placeholder(index: usize, code: &str, document: &str) -> String {
+    let mut hasher = DefaultHasher::new();
+    index.hash(&mut hasher);
+    code.hash(&mut hasher);
+    document.len().hash(&mut hasher);
+
+    format!(
+        "\u{e000}NIXSEARCH_CODE_BLOCK_{index}_{:016x}\u{e001}",
+        hasher.finish()
+    )
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -393,21 +425,6 @@ fn preprocess_nix_doc_roles_line(value: &str) -> String {
     }
 
     output
-}
-
-fn nix_doc_role_at_start(value: &str) -> Option<(&str, &str)> {
-    let role_end = value.strip_prefix('{')?.find("}`")? + 1;
-    let role = &value[1..role_end];
-    if !matches!(
-        role,
-        "option" | "file" | "var" | "command" | "env" | "manpage"
-    ) {
-        return None;
-    }
-
-    let after_role = &value[role_end + 2..];
-    let value_end = after_role.find('`')?;
-    Some((&after_role[..value_end], &after_role[value_end + 1..]))
 }
 
 pub fn format_nix(value: &str) -> String {
@@ -743,7 +760,7 @@ mod tests {
 
     #[test]
     fn markdown_code_block_placeholders_are_not_replaced_in_links() {
-        let placeholder = code_block_placeholder(0);
+        let placeholder = "\u{e000}NIXSEARCH_CODE_BLOCK_0_user\u{e001}";
         let rendered = render_doc_text(&DocText::Markdown(format!(
             "[link]({placeholder})\n\n```nix\n{{ }}\n```"
         )))
@@ -787,7 +804,7 @@ mod tests {
         .into_string();
 
         assert!(rendered.contains("<pre"));
-        assert!(!rendered.contains(&code_block_placeholder(0)));
+        assert!(!rendered.contains("NIXSEARCH_CODE_BLOCK_0"));
         assert!(rendered.find("item").unwrap() < rendered.find("<pre").unwrap());
         assert!(rendered.find("<pre").unwrap() < rendered.find("</li>").unwrap());
     }
@@ -800,14 +817,12 @@ mod tests {
             &mut code_blocks,
         );
 
-        assert_eq!(
-            markdown,
-            "- item\n\n  \u{e000}NIXSEARCH_CODE_BLOCK_0\u{e001}\n"
-        );
+        assert!(markdown.starts_with("- item\n\n  \u{e000}NIXSEARCH_CODE_BLOCK_0_"));
+        assert!(markdown.ends_with("\u{e001}\n"));
         assert_eq!(code_blocks.len(), 1);
-        assert!(code_blocks[0].contains("hello"));
-        assert!(code_blocks[0].contains("  world"));
-        assert!(!code_blocks[0].contains("  hello"));
+        assert!(code_blocks[0].html.contains("hello"));
+        assert!(code_blocks[0].html.contains("  world"));
+        assert!(!code_blocks[0].html.contains("  hello"));
     }
 
     #[test]

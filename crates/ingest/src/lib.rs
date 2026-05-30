@@ -7,6 +7,7 @@ use serde_json::Value;
 
 use nixsearch_core::document::{
     DocText, DocValue, License, Maintainer, OptionDoc, PackageDoc, SearchDocument,
+    looks_like_docbook_text,
 };
 use nixsearch_core::ingest::IngestContext;
 use nixsearch_core::source_link::Declaration;
@@ -137,34 +138,6 @@ fn doc_text_from_value(value: Value) -> DocText {
         }
         other => DocText::Json(other),
     }
-}
-
-fn looks_like_docbook_text(value: &str) -> bool {
-    let value = value.trim_start();
-    let Some(value) = value.strip_prefix('<') else {
-        return false;
-    };
-
-    let name_end = value
-        .find(|ch: char| ch.is_ascii_whitespace() || ch == '>' || ch == '/')
-        .unwrap_or(value.len());
-    matches!(
-        &value[..name_end],
-        "para"
-            | "simpara"
-            | "literal"
-            | "programlisting"
-            | "itemizedlist"
-            | "orderedlist"
-            | "variablelist"
-            | "emphasis"
-            | "filename"
-            | "command"
-            | "option"
-            | "varname"
-            | "link"
-            | "xref"
-    )
 }
 
 fn doc_value_from_value(value: Value) -> DocValue {
@@ -544,11 +517,14 @@ mod tests {
               "programs.example.docbook-emphasis-string": {
                 "description": "<emphasis>Hello</emphasis>"
               },
-              "programs.example.docbook-variablelist-string": {
-                "description": "<variablelist><varlistentry><term>foo</term><listitem><para>bar</para></listitem></varlistentry></variablelist>"
+               "programs.example.docbook-variablelist-string": {
+                 "description": "<variablelist><varlistentry><term>foo</term><listitem><para>bar</para></listitem></varlistentry></variablelist>"
               },
-              "programs.example.object": {
-                "description": { "unexpected": true }
+              "programs.example.docbook-replaceable-string": {
+                "description": "<replaceable>name</replaceable>"
+               },
+               "programs.example.object": {
+                 "description": { "unexpected": true }
              }
            }
            "#;
@@ -594,6 +570,12 @@ mod tests {
             descriptions["programs.example.docbook-variablelist-string"],
             &Some(DocText::DocBook(
                 "<variablelist><varlistentry><term>foo</term><listitem><para>bar</para></listitem></varlistentry></variablelist>".to_owned()
+            ))
+        );
+        assert_eq!(
+            descriptions["programs.example.docbook-replaceable-string"],
+            &Some(DocText::DocBook(
+                "<replaceable>name</replaceable>".to_owned()
             ))
         );
         assert_eq!(
