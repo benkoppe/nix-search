@@ -42,6 +42,24 @@ fn search(index: &SearchIndex, query: &str) -> Vec<SearchHit> {
         .hits
 }
 
+fn firefox_program_documents() -> Vec<SearchDocument> {
+    let context = ingest_context_for(SOURCE_FIXTURES, REF_SMALL);
+
+    vec![
+        option_doc_for(
+            &context,
+            "programs.firefox.enable",
+            "Firefox browser option.",
+        ),
+        option_doc_for(&context, "programs.only.enable", "Programs-only option."),
+        option_doc_for(
+            &context,
+            "services.firefox.enable",
+            "Firefox service option.",
+        ),
+    ]
+}
+
 fn names(hits: &[SearchHit]) -> Vec<&str> {
     hits.iter().map(|hit| hit.document.name()).collect()
 }
@@ -56,6 +74,14 @@ fn assert_contains(hits: &[SearchHit], name: &str) {
     assert!(
         hits.iter().any(|hit| hit.document.name() == name),
         "expected hits to contain {name:?}; got {:?}",
+        names(hits)
+    );
+}
+
+fn assert_not_contains(hits: &[SearchHit], name: &str) {
+    assert!(
+        !hits.iter().any(|hit| hit.document.name() == name),
+        "expected hits not to contain {name:?}; got {:?}",
         names(hits)
     );
 }
@@ -122,6 +148,148 @@ fn description_query_finds_matching_option() {
     let hits = search(&index, "EFI");
 
     assert_contains(&hits, OPTION_SYSTEMD_BOOT_ENABLE);
+}
+
+#[test]
+fn all_docs_query_matches_documents() {
+    let docs = firefox_program_documents();
+    let expected_total = docs.len();
+    let (_tempdir, index) = build_index(docs);
+
+    let result = index
+        .search(SearchOptions {
+            query: "*".to_owned(),
+            limit: 20,
+            ..Default::default()
+        })
+        .unwrap();
+
+    assert_eq!(result.total, expected_total);
+    assert_eq!(result.hits.len(), expected_total);
+}
+
+#[test]
+fn query_parser_and_operator_requires_both_terms() {
+    let (_tempdir, index) = build_index(firefox_program_documents());
+
+    let hits = search(&index, "firefox AND programs");
+
+    assert_contains(&hits, "programs.firefox.enable");
+    assert_not_contains(&hits, "programs.only.enable");
+    assert_not_contains(&hits, "services.firefox.enable");
+}
+
+#[test]
+fn query_parser_minus_operator_excludes_terms() {
+    let (_tempdir, index) = build_index(firefox_program_documents());
+
+    let hits = search(&index, "firefox -programs");
+
+    assert_contains(&hits, "services.firefox.enable");
+    assert_not_contains(&hits, "programs.firefox.enable");
+}
+
+#[test]
+fn query_parser_plus_operator_requires_terms() {
+    let (_tempdir, index) = build_index(firefox_program_documents());
+
+    let hits = search(&index, "firefox +programs");
+
+    assert_contains(&hits, "programs.firefox.enable");
+    assert_contains(&hits, "programs.only.enable");
+    assert_not_contains(&hits, "services.firefox.enable");
+}
+
+#[test]
+fn query_parser_not_operator_excludes_terms() {
+    let (_tempdir, index) = build_index(firefox_program_documents());
+
+    let hits = search(&index, "firefox NOT programs");
+
+    assert_contains(&hits, "services.firefox.enable");
+    assert_not_contains(&hits, "programs.firefox.enable");
+}
+
+#[test]
+fn query_parser_known_field_qualifier_constrains_results() {
+    let (_tempdir, index) = build_index(firefox_program_documents());
+
+    let hits = search(&index, "name_exact:programs.firefox.enable");
+
+    assert_contains(&hits, "programs.firefox.enable");
+    assert_not_contains(&hits, "services.firefox.enable");
+}
+
+#[test]
+fn query_parser_unknown_field_qualifier_falls_back_to_boosted_query() {
+    let (_tempdir, index) = build_index(firefox_program_documents());
+
+    let hits = search(&index, "unknown:firefox");
+
+    assert_contains(&hits, "programs.firefox.enable");
+    assert_contains(&hits, "services.firefox.enable");
+}
+
+#[test]
+fn query_parser_phrase_requires_adjacent_terms() {
+    let context = ingest_context_for(SOURCE_FIXTURES, REF_SMALL);
+    let docs = vec![
+        option_doc_for(
+            &context,
+            "adjacent.match",
+            "Firefox programs integrate tightly.",
+        ),
+        option_doc_for(
+            &context,
+            "split.match",
+            "Firefox browser programs integrate tightly.",
+        ),
+    ];
+    let (_tempdir, index) = build_index(docs);
+
+    let hits = search(&index, "\"firefox programs\"");
+
+    assert_contains(&hits, "adjacent.match");
+    assert_not_contains(&hits, "split.match");
+}
+
+#[test]
+fn query_parser_unclosed_quote_is_lenient() {
+    let (_tempdir, index) = build_index(firefox_program_documents());
+
+    let hits = search(&index, "\"firefox");
+
+    assert_contains(&hits, "programs.firefox.enable");
+    assert_contains(&hits, "services.firefox.enable");
+}
+
+#[test]
+fn query_parser_unsupported_range_falls_back_to_boosted_query() {
+    let (_tempdir, index) = build_index(firefox_program_documents());
+
+    let hits = search(&index, "[firefox TO programs]");
+
+    assert_contains(&hits, "programs.firefox.enable");
+    assert_contains(&hits, "services.firefox.enable");
+}
+
+#[test]
+fn query_parser_constraints_are_not_widened_by_fuzzy_terms() {
+    let context = ingest_context_for(SOURCE_FIXTURES, REF_SMALL);
+    let docs = vec![
+        option_doc_for(
+            &context,
+            "services.firefox.enable",
+            "Firefox service option.",
+        ),
+        option_doc_for(&context, "programs.firefix.enable", "Misspelled option."),
+    ];
+    let (_tempdir, index) = build_index(docs);
+
+    let hits = search(&index, "firefix AND services");
+
+    assert_not_contains(&hits, "services.firefox.enable");
+    assert_not_contains(&hits, "programs.firefix.enable");
 }
 
 #[test]

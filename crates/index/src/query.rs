@@ -1,5 +1,6 @@
 use anyhow::Result;
-use tantivy::query::{BooleanQuery, BoostQuery, FuzzyTermQuery, Occur, Query};
+use tantivy::query::{BooleanQuery, BoostQuery, FuzzyTermQuery, Occur, Query, QueryParser};
+use tantivy::query_grammar::{Delimiter, UserInputAst, UserInputLeaf};
 use tantivy::schema::{Field, IndexRecordOption};
 use tantivy::{Index, Score, Term};
 
@@ -46,6 +47,37 @@ impl SearchIndex {
     }
 
     fn build_text_query(&self, query_text: &str) -> Result<Box<dyn Query>> {
+        let Ok(user_input_ast) = tantivy::query_grammar::parse_query(query_text.trim()) else {
+            return self.build_boosted_text_query(query_text);
+        };
+
+        if ast_uses_query_syntax(&user_input_ast) {
+            return self.build_parsed_text_query(query_text, user_input_ast);
+        }
+
+        self.build_boosted_text_query(query_text)
+    }
+
+    fn build_parsed_text_query(
+        &self,
+        query_text: &str,
+        user_input_ast: UserInputAst,
+    ) -> Result<Box<dyn Query>> {
+        let scoring_query = self.build_boosted_text_query(query_text)?;
+        let Ok(parsed_query) = self
+            .query_parser(&user_input_ast)
+            .build_query_from_user_input_ast(user_input_ast)
+        else {
+            return Ok(scoring_query);
+        };
+
+        Ok(Box::new(BooleanQuery::new(vec![
+            (Occur::Must, parsed_query),
+            (Occur::Should, scoring_query),
+        ])))
+    }
+
+    fn build_boosted_text_query(&self, query_text: &str) -> Result<Box<dyn Query>> {
         let mut text_clauses = self.build_exact_text_clauses(query_text)?;
 
         if let Some(fuzzy_query) = build_fuzzy_query(&self.index, query_text, &self.fields)? {
@@ -53,6 +85,61 @@ impl SearchIndex {
         }
 
         Ok(Box::new(BooleanQuery::new(text_clauses)))
+    }
+
+    fn query_parser(&self, user_input_ast: &UserInputAst) -> QueryParser {
+        let mut parser = QueryParser::for_index(
+            &self.index,
+            self.query_parser_default_fields(user_input_ast),
+        );
+
+        self.set_query_parser_boosts(&mut parser);
+
+        parser
+    }
+
+    fn query_parser_default_fields(&self, user_input_ast: &UserInputAst) -> Vec<Field> {
+        let mut fields = vec![
+            self.fields.name_text,
+            self.fields.attribute_text,
+            self.fields.description,
+            self.fields.option_type,
+        ];
+
+        if !ast_contains_quoted_literal(user_input_ast) {
+            fields.extend([
+                self.fields.name_exact,
+                self.fields.name_groups,
+                self.fields.name_root,
+                self.fields.name_leaf,
+                self.fields.attribute_exact,
+                self.fields.main_program,
+                self.fields.option_set,
+                self.fields.parents,
+                self.fields.package_set,
+                self.fields.platforms,
+            ]);
+        }
+
+        fields
+    }
+
+    fn set_query_parser_boosts(&self, parser: &mut QueryParser) {
+        parser.set_field_boost(self.fields.name_text, 10.0);
+        parser.set_field_boost(self.fields.attribute_text, 12.0);
+        parser.set_field_boost(self.fields.description, 1.0);
+        parser.set_field_boost(self.fields.option_type, 1.5);
+
+        parser.set_field_boost(self.fields.name_exact, 20.0);
+        parser.set_field_boost(self.fields.name_groups, 15.0);
+        parser.set_field_boost(self.fields.name_root, 8.0);
+        parser.set_field_boost(self.fields.name_leaf, 6.0);
+        parser.set_field_boost(self.fields.attribute_exact, 25.0);
+        parser.set_field_boost(self.fields.main_program, 20.0);
+        parser.set_field_boost(self.fields.option_set, 3.0);
+        parser.set_field_boost(self.fields.parents, 2.0);
+        parser.set_field_boost(self.fields.package_set, 2.0);
+        parser.set_field_boost(self.fields.platforms, 1.0);
     }
 
     fn build_exact_text_clauses(&self, query_text: &str) -> Result<Vec<(Occur, Box<dyn Query>)>> {
@@ -216,6 +303,49 @@ impl SearchIndex {
             2.0,
             IndexRecordOption::Basic,
         );
+    }
+}
+
+fn ast_uses_query_syntax(ast: &UserInputAst) -> bool {
+    match ast {
+        UserInputAst::Clause(clauses) => clauses
+            .iter()
+            .any(|(occur, child)| occur.is_some() || ast_uses_query_syntax(child)),
+        UserInputAst::Boost(_, _) => true,
+        UserInputAst::Leaf(leaf) => leaf_uses_query_syntax(leaf),
+    }
+}
+
+fn leaf_uses_query_syntax(leaf: &UserInputLeaf) -> bool {
+    match leaf {
+        UserInputLeaf::Literal(literal) => {
+            literal.field_name.is_some()
+                || literal.delimiter != Delimiter::None
+                || literal.slop != 0
+                || literal.prefix
+        }
+        UserInputLeaf::All
+        | UserInputLeaf::Range { .. }
+        | UserInputLeaf::Set { .. }
+        | UserInputLeaf::Exists { .. }
+        | UserInputLeaf::Regex { .. } => true,
+    }
+}
+
+fn ast_contains_quoted_literal(ast: &UserInputAst) -> bool {
+    match ast {
+        UserInputAst::Clause(clauses) => clauses
+            .iter()
+            .any(|(_, child)| ast_contains_quoted_literal(child)),
+        UserInputAst::Boost(child, _) => ast_contains_quoted_literal(child),
+        UserInputAst::Leaf(leaf) => match leaf.as_ref() {
+            UserInputLeaf::Literal(literal) => literal.delimiter != Delimiter::None,
+            UserInputLeaf::All
+            | UserInputLeaf::Range { .. }
+            | UserInputLeaf::Set { .. }
+            | UserInputLeaf::Exists { .. }
+            | UserInputLeaf::Regex { .. } => false,
+        },
     }
 }
 
