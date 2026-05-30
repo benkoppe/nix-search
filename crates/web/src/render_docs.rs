@@ -132,14 +132,12 @@ fn render_markdown(value: &str) -> Markup {
     let mut options = Options::default();
     options.extension.table = true;
     options.render.unsafe_ = false;
-    let mut html = markdown_to_html(&markdown, &options);
+    let mut html = sanitize_rendered_markdown(&markdown_to_html(&markdown, &options));
 
     for code_block in code_blocks {
         let placeholder = code_block.placeholder;
         html = replace_code_block_placeholder(html, &placeholder, &code_block.html);
     }
-
-    let html = sanitize_rendered_markdown(&html);
 
     html! { div.doc-content { (PreEscaped(html)) } }
 }
@@ -220,8 +218,7 @@ fn extract_fenced_code_blocks(value: &str, code_blocks: &mut Vec<ExtractedCodeBl
             code_index += 1;
         }
 
-        let language = language_from_info(opening.info(), &code);
-        let formatted = format_code(language, &code);
+        let (language, formatted) = language_and_formatted_code(opening.info(), &code);
         let placeholder = code_block_placeholder(code_blocks.len(), &code, value);
 
         code_blocks.push(ExtractedCodeBlock {
@@ -269,39 +266,59 @@ fn code_block_placeholder(index: usize, code: &str, document: &str) -> String {
     unreachable!("unbounded salt search always returns")
 }
 
-fn language_from_info(info: &str, code: &str) -> CodeLanguage {
+fn language_and_formatted_code<'a>(info: &str, code: &'a str) -> (CodeLanguage, Cow<'a, str>) {
     let info = info
         .split_whitespace()
         .next()
         .unwrap_or("")
         .to_ascii_lowercase();
-    match info.as_str() {
-        "nix" => CodeLanguage::Nix,
-        "toml" => CodeLanguage::Toml,
-        "json" => CodeLanguage::Json,
-        "bash" | "sh" | "shell" | "console" | "shellsession" => CodeLanguage::Bash,
-        "fish" => CodeLanguage::Fish,
-        "ini" => CodeLanguage::Ini,
-        "yaml" | "yml" => CodeLanguage::Yaml,
-        "xml" => CodeLanguage::Xml,
-        "sql" => CodeLanguage::Sql,
-        "nushell" | "nu" => CodeLanguage::Nushell,
-        "" if nixfmt_rs::format(code).is_ok() => CodeLanguage::Nix,
-        "" if serde_json::from_str::<Value>(code).is_ok() => CodeLanguage::Json,
-        _ => CodeLanguage::PlainText,
+
+    let language = match info.as_str() {
+        "nix" => Some(CodeLanguage::Nix),
+        "toml" => Some(CodeLanguage::Toml),
+        "json" => Some(CodeLanguage::Json),
+        "bash" | "sh" | "shell" | "console" | "shellsession" => Some(CodeLanguage::Bash),
+        "fish" => Some(CodeLanguage::Fish),
+        "ini" => Some(CodeLanguage::Ini),
+        "yaml" | "yml" => Some(CodeLanguage::Yaml),
+        "xml" => Some(CodeLanguage::Xml),
+        "sql" => Some(CodeLanguage::Sql),
+        "nushell" | "nu" => Some(CodeLanguage::Nushell),
+        "" => None,
+        _ => Some(CodeLanguage::PlainText),
+    };
+
+    if let Some(language) = language {
+        return (language, format_code_for_language(language, code));
+    }
+
+    if let Ok(formatted) = nixfmt_rs::format(code) {
+        return (
+            CodeLanguage::Nix,
+            Cow::Owned(formatted.trim_end_matches('\n').to_owned()),
+        );
+    }
+
+    if let Some(formatted) = format_json(code) {
+        return (CodeLanguage::Json, formatted);
+    }
+
+    (CodeLanguage::PlainText, Cow::Borrowed(code.trim_end()))
+}
+
+fn format_code_for_language(language: CodeLanguage, code: &str) -> Cow<'_, str> {
+    match language {
+        CodeLanguage::Nix => Cow::Owned(format_nix(code)),
+        CodeLanguage::Json => format_json(code).unwrap_or(Cow::Borrowed(code)),
+        _ => Cow::Borrowed(code.trim_end()),
     }
 }
 
-fn format_code(language: CodeLanguage, code: &str) -> Cow<'_, str> {
-    match language {
-        CodeLanguage::Nix => Cow::Owned(format_nix(code)),
-        CodeLanguage::Json => serde_json::from_str::<Value>(code)
-            .ok()
-            .and_then(|value| serde_json::to_string_pretty(&value).ok())
-            .map(Cow::Owned)
-            .unwrap_or(Cow::Borrowed(code)),
-        _ => Cow::Borrowed(code.trim_end()),
-    }
+fn format_json(code: &str) -> Option<Cow<'_, str>> {
+    serde_json::from_str::<Value>(code)
+        .ok()
+        .and_then(|value| serde_json::to_string_pretty(&value).ok())
+        .map(Cow::Owned)
 }
 
 pub fn format_nix(value: &str) -> String {
@@ -612,6 +629,34 @@ mod tests {
     }
 
     #[test]
+    fn highlighted_markdown_fences_preserve_trusted_styles() {
+        let rendered = render_doc_text(&DocText::Markdown(
+            "```nix\n{ foo = \"bar\"; }\n```".to_owned(),
+        ))
+        .into_string();
+
+        assert!(rendered.contains("language-nix"));
+        assert!(rendered.contains("style="));
+    }
+
+    #[test]
+    fn highlighted_markdown_fences_do_not_preserve_user_styles() {
+        let rendered = render_doc_text(&DocText::Markdown(
+            r#"<span style="position:fixed">bad</span>
+
+```nix
+{ foo = "bar"; }
+```"#
+                .to_owned(),
+        ))
+        .into_string();
+
+        assert!(rendered.contains("language-nix"));
+        assert!(rendered.contains("style="));
+        assert!(!rendered.contains("position:fixed"));
+    }
+
+    #[test]
     fn markdown_tilde_fences_are_formatted_and_highlighted() {
         let rendered = render_doc_text(&DocText::Markdown(
             "Example:\n\n~~~json\n{\"foo\":\"bar\"}\n~~~".to_owned(),
@@ -623,6 +668,30 @@ mod tests {
         assert!(rendered.contains("foo"));
         assert!(rendered.contains("bar"));
         assert!(!rendered.contains("~~~"));
+    }
+
+    #[test]
+    fn unlabelled_fences_detect_nix_and_json() {
+        let nix = render_doc_text(&DocText::Markdown(
+            "```\n{ foo = \"bar\"; }\n```".to_owned(),
+        ))
+        .into_string();
+        let json = render_doc_text(&DocText::Markdown("```\n{\"foo\":true}\n```".to_owned()))
+            .into_string();
+
+        assert!(nix.contains("language-nix"));
+        assert!(json.contains("language-json"));
+    }
+
+    #[test]
+    fn labelled_text_fences_remain_plain_text() {
+        let rendered = render_doc_text(&DocText::Markdown(
+            "```text\n{ foo = \"bar\"; }\n```".to_owned(),
+        ))
+        .into_string();
+
+        assert!(rendered.contains("language-plain-text"));
+        assert!(!rendered.contains("language-nix"));
     }
 
     #[test]
